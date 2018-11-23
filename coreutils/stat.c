@@ -212,7 +212,7 @@ static const char *human_fstype(uint32_t f_type)
 		{ 0x52654973, "reiserfs" },
 		{ 0x28cd3d45, "cramfs" },
 		{ 0x7275,     "romfs" },
-		{ 0x858458f6, "romfs" },
+		{ 0x858458f6, "ramfs" },
 		{ 0x73717368, "squashfs" },
 		{ 0x62656572, "sysfs" },
 		{ 0, "UNKNOWN" }
@@ -759,10 +759,13 @@ int stat_main(int argc UNUSED_PARAM, char **argv)
 	IF_FEATURE_STAT_FORMAT(char *format = NULL;)
 	int i;
 	int ok;
-	unsigned opts;
 	statfunc_ptr statfunc = do_stat;
+#if ENABLE_FEATURE_STAT_FILESYSTEM || ENABLE_SELINUX
+	unsigned opts;
 
-	opts = getopt32(argv, "^"
+	opts =
+#endif
+	getopt32(argv, "^"
 		"tL"
 		IF_FEATURE_STAT_FILESYSTEM("f")
 		IF_SELINUX("Z")
