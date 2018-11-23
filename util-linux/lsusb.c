@@ -15,25 +15,26 @@
 static int FAST_FUNC fileAction(
 		const char *fileName,
 		struct stat *statbuf UNUSED_PARAM,
-		void *userData,
+		void *userData UNUSED_PARAM,
 		int depth UNUSED_PARAM)
 {
 	parser_t *parser;
 	char *tokens[4];
-	char *busnum = NULL, *devnum = NULL, *devname = NULL;
+	char *busnum = NULL, *devnum = NULL;
 	int product_vid = 0, product_did = 0;
 	char *uevent_filename = concat_path_file(fileName, "/uevent");
 
 	parser = config_open2(uevent_filename, fopen_for_read);
 	free(uevent_filename);
 
-	while (config_read(parser, tokens, 4, 2, "\\=", PARSE_NORMAL)) {
+	while (config_read(parser, tokens, 4, 2, "\\/=", PARSE_NORMAL)) {
 		if ((parser->lineno == 1) && strcmp(tokens[0], "DEVTYPE") == 0) {
 			break;
 		}
 
 		if (strcmp(tokens[0], "PRODUCT") == 0) {
-			sscanf(tokens[1], "%x/%x/", &product_vid, &product_did);
+			product_vid = xstrtou(tokens[1], 16);
+			product_did = xstrtou(tokens[2], 16);
 			continue;
 		}
 
@@ -46,29 +47,13 @@ static int FAST_FUNC fileAction(
 			devnum = xstrdup(tokens[1]);
 			continue;
 		}
-
-		if (strcmp(tokens[0], "DEVNAME") == 0) {
-			devname = xstrdup(tokens[1]);
-			continue;
-		}
 	}
 	config_close(parser);
 
 	if (busnum) {
-		char extra[127] = "";
-		if (userData) {
-			int class;
-			uevent_filename = concat_path_file(fileName, "/bDeviceClass");
-			FILE *tfp = fopen_for_read(uevent_filename);
-			free(uevent_filename);
-			fscanf(tfp, "%x", &class);
-			fclose(tfp);
-			snprintf(extra, sizeof(extra), " Class: %02X\t/dev/%s", class, devname);
-		}
-		printf("Bus %s Device %s: ID %04x:%04x%s\n", busnum, devnum, product_vid, product_did, extra);
+		printf("Bus %s Device %s: ID %04x:%04x\n", busnum, devnum, product_vid, product_did);
 		free(busnum);
 		free(devnum);
-		free(devname);
 	}
 
 	return TRUE;
@@ -83,7 +68,7 @@ int lsusb_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 			ACTION_RECURSE,
 			fileAction,
 			NULL, /* dirAction */
-			argc > 1 ? argv[1] : NULL, /* userData */
+			NULL, /* userData */
 			0 /* depth */);
 
 	return EXIT_SUCCESS;

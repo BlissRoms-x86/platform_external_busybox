@@ -33,7 +33,6 @@ typedef struct module_info {
 static int FAST_FUNC parse_module(const char *fname, struct stat *sb UNUSED_PARAM,
 				void *data, int depth UNUSED_PARAM)
 {
-	char modname[MODULE_NAME_LEN];
 	module_info **first = (module_info **) data;
 	char *image, *ptr;
 	module_info *info;
@@ -50,13 +49,13 @@ static int FAST_FUNC parse_module(const char *fname, struct stat *sb UNUSED_PARA
 	*first = info;
 
 	info->dnext = info->dprev = info;
-	if (strncmp(fname, "./", 2) == 0)
-		info->name = xstrdup(fname + 2);
-	else
-		info->name = xstrdup(fname);
-	info->modname = xstrdup(filename2modname(fname, modname));
+	info->name = xstrdup(fname + 2); /* skip "./" */
+	info->modname = filename2modname(
+			bb_get_last_path_component_nostrip(fname),
+			NULL
+	);
 	for (ptr = image; ptr < image + len - 10; ptr++) {
-		if (strncmp(ptr, "depends=", 8) == 0) {
+		if (is_prefixed_with(ptr, "depends=")) {
 			char *u;
 
 			ptr += 8;
@@ -65,15 +64,15 @@ static int FAST_FUNC parse_module(const char *fname, struct stat *sb UNUSED_PARA
 					*u = '_';
 			ptr += string_to_llist(ptr, &info->dependencies, ",");
 		} else if (ENABLE_FEATURE_MODUTILS_ALIAS
-		 && strncmp(ptr, "alias=", 6) == 0
+		 && is_prefixed_with(ptr, "alias=")
 		) {
 			llist_add_to(&info->aliases, xstrdup(ptr + 6));
 			ptr += strlen(ptr);
 		} else if (ENABLE_FEATURE_MODUTILS_SYMBOLS
-		 && strncmp(ptr, "__ksymtab_", 10) == 0
+		 && is_prefixed_with(ptr, "__ksymtab_")
 		) {
 			ptr += 10;
-			if (strncmp(ptr, "gpl", 3) == 0
+			if (is_prefixed_with(ptr, "gpl")
 			 || strcmp(ptr, "strings") == 0
 			) {
 				continue;
@@ -130,10 +129,11 @@ static void xfreopen_write(const char *file, FILE *f)
 }
 
 //usage:#if !ENABLE_MODPROBE_SMALL
-//usage:#define depmod_trivial_usage "[-n] [MODFILES]..."
+//usage:#define depmod_trivial_usage "[-n] [-b BASE] [VERSION] [MODFILES]..."
 //usage:#define depmod_full_usage "\n\n"
 //usage:       "Generate modules.dep, alias, and symbols files"
 //usage:     "\n"
+//usage:     "\n	-b BASE	Use BASE/lib/modules/VERSION"
 //usage:     "\n	-n	Dry run: print files to stdout"
 //usage:#endif
 
@@ -186,9 +186,8 @@ int depmod_main(int argc UNUSED_PARAM, char **argv)
 {
 	module_info *modules, *m, *dep;
 	const char *moddir_base = "/";
-	char *version;
+	char *moddir, *version;
 	struct utsname uts;
-	struct stat info;
 	int tmp;
 
 	getopt32(argv, "aAb:eF:nruqC:", &moddir_base, NULL, NULL);
@@ -206,10 +205,10 @@ int depmod_main(int argc UNUSED_PARAM, char **argv)
 		uname(&uts);
 		version = uts.release;
 	}
-	xchdir(&CONFIG_DEFAULT_MODULES_DIR[1]);
-	if (stat(version, &info) == 0) {
-		xchdir(version);
-	}
+	moddir = concat_path_file(&CONFIG_DEFAULT_MODULES_DIR[1], version);
+	xchdir(moddir);
+	if (ENABLE_FEATURE_CLEAN_UP)
+		free(moddir);
 
 	/* Scan modules */
 	modules = NULL;
@@ -245,17 +244,19 @@ int depmod_main(int argc UNUSED_PARAM, char **argv)
 	if (!(option_mask32 & OPT_n))
 		xfreopen_write("modules.alias", stdout);
 	for (m = modules; m != NULL; m = m->next) {
+		char modname[MODULE_NAME_LEN];
 		const char *fname = bb_basename(m->name);
-		int fnlen = strchrnul(fname, '.') - fname;
+		filename2modname(fname, modname);
 		while (m->aliases) {
-			/* Last word can well be m->modname instead,
-			 * but depmod from module-init-tools 3.4
-			 * uses module basename, i.e., no s/-/_/g.
-			 * (pathname and .ko.* are still stripped)
-			 * Mimicking that... */
-			printf("alias %s %.*s\n",
+			/*
+			 * Last word used to be a basename
+			 * (filename with path and .ko.* stripped)
+			 * at the time of module-init-tools 3.4.
+			 * kmod v.12 uses module name, i.e., s/-/_/g.
+			 */
+			printf("alias %s %s\n",
 				(char*)llist_pop(&m->aliases),
-				fnlen, fname);
+				modname);
 		}
 	}
 #endif
@@ -263,12 +264,13 @@ int depmod_main(int argc UNUSED_PARAM, char **argv)
 	if (!(option_mask32 & OPT_n))
 		xfreopen_write("modules.symbols", stdout);
 	for (m = modules; m != NULL; m = m->next) {
+		char modname[MODULE_NAME_LEN];
 		const char *fname = bb_basename(m->name);
-		int fnlen = strchrnul(fname, '.') - fname;
+		filename2modname(fname, modname);
 		while (m->symbols) {
-			printf("alias symbol:%s %.*s\n",
+			printf("alias symbol:%s %s\n",
 				(char*)llist_pop(&m->symbols),
-				fnlen, fname);
+				modname);
 		}
 	}
 #endif

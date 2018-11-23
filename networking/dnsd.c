@@ -194,7 +194,7 @@ static char *table_lookup(struct dns_entry *d,
 		if ((len != 1 || d->name[1] != '*')
 		/* we assume (do not check) that query_string
 		 * ends in ".in-addr.arpa" */
-		 && strncmp(d->rip, query_string, strlen(d->rip)) == 0
+		 && is_prefixed_with(query_string, d->rip)
 		) {
 #if DEBUG
 			fprintf(stderr, "Found name:%s\n", d->name);
@@ -492,7 +492,7 @@ int dnsd_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int dnsd_main(int argc UNUSED_PARAM, char **argv)
 {
 	const char *listen_interface = "0.0.0.0";
-	const char *fileconf = "/etc/dnsd.conf";
+	const char *fileconf = "/system/etc/dnsd.conf";
 	struct dns_entry *conf_data;
 	uint32_t conf_ttl = DEFAULT_TTL;
 	char *sttl, *sport;

@@ -16,6 +16,7 @@
 //usage:     "\n	-V	Verify file context on disk matches defaults"
 
 #include "libbb.h"
+#include "android/android_selinux.h"
 
 static int print_matchpathcon(char *path, int noprint)
 {
@@ -64,11 +65,6 @@ int matchpathcon_main(int argc UNUSED_PARAM, char **argv)
 			bb_perror_msg_and_die("error while processing %s", prefix);
 	}
 
-#ifdef ANDROID
-	if (!(opts & (OPT_FCONTEXT | OPT_PREFIX))) {
-		matchpathcon_init(selinux_file_contexts_path());
-	}
-#endif
 	while ((path = *argv++) != NULL) {
 		security_context_t con;
 		int rc;

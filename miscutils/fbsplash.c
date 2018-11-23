@@ -460,7 +460,7 @@ int fbsplash_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int fbsplash_main(int argc UNUSED_PARAM, char **argv)
 {
 	const char *fb_device, *cfg_filename, *fifo_filename;
-	FILE *fp = NULL;
+	FILE *fp = fp; // for compiler
 	char *num_buf;
 	unsigned num;
 	bool bCursorOff;
@@ -468,7 +468,7 @@ int fbsplash_main(int argc UNUSED_PARAM, char **argv)
 	INIT_G();
 
 	// parse command line options
-	fb_device = "/dev/graphics/fb0";
+	fb_device = "/dev/fb0";
 	cfg_filename = NULL;
 	fifo_filename = NULL;
 	bCursorOff = 1 & getopt32(argv, "cs:d:i:f:",
@@ -516,7 +516,7 @@ int fbsplash_main(int argc UNUSED_PARAM, char **argv)
 	// handle a case when we have many buffered lines
 	// already in the pipe
 	while ((num_buf = xmalloc_fgetline(fp)) != NULL) {
-		if (strncmp(num_buf, "exit", 4) == 0) {
+		if (is_prefixed_with(num_buf, "exit")) {
 			DEBUG_MESSAGE("exit");
 			break;
 		}

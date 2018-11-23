@@ -8,14 +8,6 @@
  */
 #include "libbb.h"
 
-#if defined(IPV6_PKTINFO) && defined(__BIONIC__) && !defined(BIONIC_ICS)
-// now included in Bionic ICS
-struct in6_pktinfo {
-        struct in6_addr ipi6_addr;    // src/dst IPv6 address
-        unsigned int    ipi6_ifindex; // send/recv if index
-};
-#endif
-
 /*
  * This asks kernel to let us know dst addr/port of incoming packets
  * We don't check for errors here. Not supported == won't be used
@@ -24,10 +16,10 @@ void FAST_FUNC
 socket_want_pktinfo(int fd UNUSED_PARAM)
 {
 #ifdef IP_PKTINFO
-	setsockopt(fd, IPPROTO_IP, IP_PKTINFO, &const_int_1, sizeof(int));
+	setsockopt_1(fd, IPPROTO_IP, IP_PKTINFO);
 #endif
 #if ENABLE_FEATURE_IPV6 && defined(IPV6_PKTINFO)
-	setsockopt(fd, IPPROTO_IPV6, IPV6_PKTINFO, &const_int_1, sizeof(int));
+	setsockopt_1(fd, IPPROTO_IPV6, IPV6_PKTINFO);
 #endif
 }
 

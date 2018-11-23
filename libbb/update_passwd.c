@@ -15,14 +15,16 @@
  */
 #include "libbb.h"
 
+/*
 #if ENABLE_SELINUX
+
 static void check_selinux_update_passwd(const char *username)
 {
 	security_context_t context;
 	char *seuser;
 
 	if (getuid() != (uid_t)0 || is_selinux_enabled() == 0)
-		return;  /* No need to check */
+		return;
 
 	if (getprevcon_raw(&context) < 0)
 		bb_perror_msg_and_die("getprevcon failed");
@@ -30,15 +32,16 @@ static void check_selinux_update_passwd(const char *username)
 	if (!seuser)
 		bb_error_msg_and_die("invalid context '%s'", context);
 	if (strcmp(seuser, username) != 0) {
-		if (selinux_check_passwd_access(PASSWD__PASSWD) != 0)
+		if (checkPasswdAccess(PASSWD__PASSWD) != 0)
 			bb_error_msg_and_die("SELinux: access denied");
 	}
 	if (ENABLE_FEATURE_CLEAN_UP)
 		freecon(context);
 }
 #else
+*/
 # define check_selinux_update_passwd(username) ((void)0)
-#endif
+//#endif
 
 /*
  1) add a user: update_passwd(FILE, USER, REMAINING_PWLINE, NULL)
@@ -62,6 +65,8 @@ static void check_selinux_update_passwd(const char *username)
     only if CONFIG_PASSWD=y and applet_name[0] == 'p' like in passwd
     or if CONFIG_CHPASSWD=y and applet_name[0] == 'c' like in chpasswd
 
+ 8) delete a user from all groups: update_passwd(FILE, NULL, NULL, MEMBER)
+
  This function does not validate the arguments fed to it
  so the calling program should take care of that.
 
@@ -82,7 +87,6 @@ int FAST_FUNC update_passwd(const char *filename,
 	char *fnamesfx;
 	char *sfx_char;
 	char *name_colon;
-	unsigned user_len;
 	int old_fd;
 	int new_fd;
 	int i;
@@ -99,13 +103,13 @@ int FAST_FUNC update_passwd(const char *filename,
 	if (filename == NULL)
 		return ret;
 
-	check_selinux_update_passwd(name);
+	if (name)
+		check_selinux_update_passwd(name);
 
-	/* New passwd file, "/etc/passwd+" for now */
+	/* New passwd file, "/system/etc/passwd+" for now */
 	fnamesfx = xasprintf("%s+", filename);
 	sfx_char = &fnamesfx[strlen(fnamesfx)-1];
-	name_colon = xasprintf("%s:", name);
-	user_len = strlen(name_colon);
+	name_colon = xasprintf("%s:", name ? name : "");
 
 	if (shadow)
 		old_fp = fopen(filename, "r+");
@@ -120,7 +124,7 @@ int FAST_FUNC update_passwd(const char *filename,
 
 	selinux_preserve_fcontext(old_fd);
 
-	/* Try to create "/etc/passwd+". Wait if it exists. */
+	/* Try to create "/system/etc/passwd+". Wait if it exists. */
 	i = 30;
 	do {
 		// FIXME: on last iteration try w/o O_EXCL but with O_TRUNC?
@@ -140,7 +144,7 @@ int FAST_FUNC update_passwd(const char *filename,
 	errno = 0;
 	new_fp = xfdopen_for_write(new_fd);
 
-	/* Backup file is "/etc/passwd-" */
+	/* Backup file is "/system/etc/passwd-" */
 	*sfx_char = '-';
 	/* Delete old backup */
 	i = (unlink(fnamesfx) && errno != ENOENT);
@@ -167,13 +171,45 @@ int FAST_FUNC update_passwd(const char *filename,
 		line = xmalloc_fgetline(old_fp);
 		if (!line) /* EOF/error */
 			break;
-		if (strncmp(name_colon, line, user_len) != 0) {
+
+		if (!name && member) {
+			/* Delete member from all groups */
+			/* line is "GROUP:PASSWD:[member1[,member2]...]" */
+			unsigned member_len = strlen(member);
+			char *list = strrchr(line, ':');
+			while (list) {
+				list++;
+ next_list_element:
+				if (is_prefixed_with(list, member)) {
+					char c;
+					changed_lines++;
+					c = list[member_len];
+					if (c == '\0') {
+						if (list[-1] == ',')
+							list--;
+						*list = '\0';
+						break;
+					}
+					if (c == ',') {
+						overlapping_strcpy(list, list + member_len + 1);
+						goto next_list_element;
+					}
+					changed_lines--;
+				}
+				list = strchr(list, ',');
+			}
+			fprintf(new_fp, "%s\n", line);
+			goto next;
+		}
+
+		cp = is_prefixed_with(line, name_colon);
+		if (!cp) {
 			fprintf(new_fp, "%s\n", line);
 			goto next;
 		}
 
 		/* We have a match with "name:"... */
-		cp = line + user_len; /* move past name: */
+		/* cp points past "name:" */
 
 #if ENABLE_FEATURE_ADDUSER_TO_GROUP || ENABLE_FEATURE_DEL_USER_FROM_GROUP
 		if (member) {

@@ -38,7 +38,7 @@
 
 #include "libbb.h"
 
-#define SHELLS_FILE "/etc/shells"
+#define SHELLS_FILE "/system/etc/shells"
 
 #define REMOVE_SHELL (ENABLE_REMOVE_SHELL && (!ENABLE_ADD_SHELL || applet_name[0] == 'r'))
 #define ADD_SHELL    (ENABLE_ADD_SHELL && (!ENABLE_REMOVE_SHELL || applet_name[0] == 'a'))
@@ -100,7 +100,7 @@ int add_remove_shell_main(int argc UNUSED_PARAM, char **argv)
 				cpp++;
 			}
 			/* copy shell name from old to new file */
-			printf("%s\n", line);
+			puts(line);
  next_line:
 			free(line);
 		}
@@ -112,7 +112,7 @@ int add_remove_shell_main(int argc UNUSED_PARAM, char **argv)
 		char **cpp = argv;
 		while (*cpp) {
 			if (*cpp != dont_add)
-				printf("%s\n", *cpp);
+				puts(*cpp);
 			cpp++;
 		}
 	}

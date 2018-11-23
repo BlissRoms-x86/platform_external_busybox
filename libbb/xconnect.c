@@ -12,15 +12,37 @@
 #include <netinet/in.h>
 #include <net/if.h>
 #include <sys/un.h>
+#include "../libres/dietdns.h"
 #include "libbb.h"
+
+int FAST_FUNC setsockopt_int(int fd, int level, int optname, int optval)
+{
+	return setsockopt(fd, level, optname, &optval, sizeof(int));
+}
+int FAST_FUNC setsockopt_1(int fd, int level, int optname)
+{
+	return setsockopt_int(fd, level, optname, 1);
+}
+int FAST_FUNC setsockopt_SOL_SOCKET_int(int fd, int optname, int optval)
+{
+	return setsockopt_int(fd, SOL_SOCKET, optname, optval);
+}
+int FAST_FUNC setsockopt_SOL_SOCKET_1(int fd, int optname)
+{
+	return setsockopt_SOL_SOCKET_int(fd, optname, 1);
+}
 
 void FAST_FUNC setsockopt_reuseaddr(int fd)
 {
-	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &const_int_1, sizeof(const_int_1));
+	setsockopt_SOL_SOCKET_1(fd, SO_REUSEADDR);
 }
 int FAST_FUNC setsockopt_broadcast(int fd)
 {
-	return setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &const_int_1, sizeof(const_int_1));
+	return setsockopt_SOL_SOCKET_1(fd, SO_BROADCAST);
+}
+int FAST_FUNC setsockopt_keepalive(int fd)
+{
+	return setsockopt_SOL_SOCKET_1(fd, SO_KEEPALIVE);
 }
 
 #ifdef SO_BINDTODEVICE
@@ -171,7 +193,7 @@ IF_NOT_FEATURE_IPV6(sa_family_t af = AF_INET;)
 	const char *cp;
 	struct addrinfo hint;
 
-	if (ENABLE_FEATURE_UNIX_LOCAL && strncmp(host, "local:", 6) == 0) {
+	if (ENABLE_FEATURE_UNIX_LOCAL && is_prefixed_with(host, "local:")) {
 		struct sockaddr_un *sun;
 
 		r = xzalloc(LSA_LEN_SIZE + sizeof(struct sockaddr_un));
@@ -261,7 +283,7 @@ IF_NOT_FEATURE_IPV6(sa_family_t af = AF_INET;)
 	 * for each possible socket type (tcp,udp,raw...): */
 	hint.ai_socktype = SOCK_STREAM;
 	hint.ai_flags = ai_flags & ~DIE_ON_ERROR;
-	rc = getaddrinfo(host, NULL, &hint, &result);
+	rc = diet_getaddrinfo(host, NULL, &hint, &result);
 	if (rc || !result) {
 		bb_error_msg("bad address '%s'", org_host);
 		if (ai_flags & DIE_ON_ERROR)
@@ -288,7 +310,7 @@ IF_NOT_FEATURE_IPV6(sa_family_t af = AF_INET;)
 	set_nport(&r->u.sa, htons(port));
  ret:
 	if (result)
-		freeaddrinfo(result);
+		diet_freeaddrinfo(result);
 	return r;
 }
 #if !ENABLE_FEATURE_IPV6

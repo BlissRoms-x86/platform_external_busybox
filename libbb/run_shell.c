@@ -34,18 +34,16 @@
 #endif
 
 #if ENABLE_SELINUX
-static security_context_t current_sid = NULL;
+static security_context_t current_sid;
 
 void FAST_FUNC renew_current_security_context(void)
 {
-	if (current_sid)
-		freecon(current_sid);  /* Release old context  */
+	freecon(current_sid);  /* Release old context  */
 	getcon(&current_sid);  /* update */
 }
 void FAST_FUNC set_current_security_context(security_context_t sid)
 {
-	if (current_sid)
-		freecon(current_sid);  /* Release old context  */
+	freecon(current_sid);  /* Release old context  */
 	current_sid = sid;
 }
 
@@ -84,7 +82,6 @@ void FAST_FUNC run_shell(const char *shell, int loginshell, const char *command,
 	args[argno] = NULL;
 
 #if ENABLE_SELINUX
-	renew_current_security_context();
 	if (current_sid)
 		setexeccon(current_sid);
 	if (ENABLE_FEATURE_CLEAN_UP)

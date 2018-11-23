@@ -160,13 +160,6 @@
 #define block_buf bb_common_bufsiz1
 
 
-#if !ENABLE_FEATURE_SEAMLESS_GZ && !ENABLE_FEATURE_SEAMLESS_BZ2
-/* Do not pass gzip flag to writeTarFile() */
-#define writeTarFile(tar_fd, verboseFlag, optFlags, recurseFlags, include, exclude, gzip) \
-	writeTarFile(tar_fd, verboseFlag, optFlags, recurseFlags, include, exclude)
-#endif
-
-
 #if ENABLE_FEATURE_TAR_CREATE
 
 /*
@@ -187,8 +180,6 @@ typedef struct TarBallInfo {
 	int tarFd;                      /* Open-for-write file descriptor
 	                                 * for the tarball */
 	int verboseFlag;                /* Whether to print extra stuff or not */
-	unsigned optFlags;              /* all command line flags */
-
 	const llist_t *excludeList;     /* List of files to not include */
 	HardLinkInfo *hlInfoHead;       /* Hard Link Tracking Information */
 	HardLinkInfo *hlInfo;           /* Hard Link Info for the current file */
@@ -212,7 +203,6 @@ enum {
 	CONTTYPE = '7',		/* reserved */
 	GNULONGLINK = 'K',	/* GNU long (>100 chars) link name */
 	GNULONGNAME = 'L',	/* GNU long (>100 chars) file name */
-	EXTTYPE = 'x',		/* ext metadata for next file, store selinux_context */
 };
 
 /* Might be faster (and bigger) if the dev/ino were stored in numeric order;) */
@@ -354,34 +344,6 @@ static void writeLongname(int fd, int type, const char *name, int dir)
 }
 #endif
 
-#if ENABLE_FEATURE_TAR_SELINUX
-# define SELINUX_CONTEXT_KEYWORD "RHT.security.selinux"
-/* Write 2 blocks : extended file header + selinux context */
-static int writeSeHeader(int fd, const char *con, struct tar_header_t *header)
-{
-	char block[TAR_BLOCK_SIZE];
-	struct tar_header_t hd;
-
-	int sz = sizeof(SELINUX_CONTEXT_KEYWORD) + 4 + strlen(con);
-	if (sz >= 100) sz++; /* another ascii digit for size */
-	if (sz > TAR_BLOCK_SIZE)
-		return FALSE;
-
-	memset(&block, 0, TAR_BLOCK_SIZE);
-	sprintf(block, "%d %s=%s\n", sz, SELINUX_CONTEXT_KEYWORD, con);
-
-	/* write duplicated file entry */
-	memcpy(&hd, header, sizeof(hd));
-	hd.typeflag = EXTTYPE;
-	PUT_OCTAL(hd.size, sz);
-	chksum_and_xwrite(fd, &hd);
-
-	/* write selinux context */
-	xwrite(fd, &block, TAR_BLOCK_SIZE);
-	return TRUE;
-}
-#endif
-
 /* Write out a tar header for the specified file/directory/whatever */
 static int writeTarHeader(struct TarBallInfo *tbInfo,
 		const char *header_name, const char *fileName, struct stat *statbuf)
@@ -397,7 +359,8 @@ static int writeTarHeader(struct TarBallInfo *tbInfo,
 	PUT_OCTAL(header.uid, statbuf->st_uid);
 	PUT_OCTAL(header.gid, statbuf->st_gid);
 	memset(header.size, '0', sizeof(header.size)-1); /* Regular file size is handled later */
-	PUT_OCTAL(header.mtime, statbuf->st_mtime);
+	/* users report that files with negative st_mtime cause trouble, so: */
+	PUT_OCTAL(header.mtime, statbuf->st_mtime >= 0 ? statbuf->st_mtime : 0);
 
 	/* Enter the user and group names */
 	safe_strncpy(header.uname, get_cached_username(statbuf->st_uid), sizeof(header.uname));
@@ -481,7 +444,7 @@ static int writeTarHeader(struct TarBallInfo *tbInfo,
 			*p8 |= 0x80;
 		} else {
 			bb_error_msg_and_die("can't store file '%s' "
-				"of size %"FILESIZE_FMT"u, aborting",
+				"of size %"OFF_FMT"u, aborting",
 				fileName, statbuf->st_size);
 		}
 		header.typeflag = REGTYPE;
@@ -496,18 +459,6 @@ static int writeTarHeader(struct TarBallInfo *tbInfo,
 	if (header.name[sizeof(header.name)-1])
 		writeLongname(tbInfo->tarFd, GNULONGNAME,
 				header_name, S_ISDIR(statbuf->st_mode));
-#endif
-
-#if ENABLE_FEATURE_TAR_SELINUX
-	if (is_selinux_enabled() && (tbInfo->optFlags & ARCHIVE_STORE_SELINUX)) {
-		security_context_t sid;
-		lgetfilecon(fileName, &sid);
-		if (sid) {
-			// optional extended block
-			writeSeHeader(tbInfo->tarFd, sid, &header);
-			freecon(sid);
-		}
-	}
 #endif
 
 	/* Now write the header out to disk */
@@ -663,21 +614,12 @@ static int FAST_FUNC writeFileToTarball(const char *fileName, struct stat *statb
 	return TRUE;
 }
 
-#if ENABLE_FEATURE_SEAMLESS_GZ || ENABLE_FEATURE_SEAMLESS_BZ2
-# if !(ENABLE_FEATURE_SEAMLESS_GZ && ENABLE_FEATURE_SEAMLESS_BZ2)
-#  define vfork_compressor(tar_fd, gzip) vfork_compressor(tar_fd)
-# endif
+#if SEAMLESS_COMPRESSION
 /* Don't inline: vfork scares gcc and pessimizes code */
-static void NOINLINE vfork_compressor(int tar_fd, int gzip)
+static void NOINLINE vfork_compressor(int tar_fd, const char *gzip)
 {
 	pid_t gzipPid;
-# if ENABLE_FEATURE_SEAMLESS_GZ && ENABLE_FEATURE_SEAMLESS_BZ2
-	const char *zip_exec = (gzip == 1) ? "gzip" : "bzip2";
-# elif ENABLE_FEATURE_SEAMLESS_GZ
-	const char *zip_exec = "gzip";
-# else /* only ENABLE_FEATURE_SEAMLESS_BZ2 */
-	const char *zip_exec = "bzip2";
-# endif
+
 	// On Linux, vfork never unpauses parent early, although standard
 	// allows for that. Do we want to waste bytes checking for it?
 # define WAIT_FOR_CHILD 0
@@ -690,11 +632,6 @@ static void NOINLINE vfork_compressor(int tar_fd, int gzip)
 	xpiped_pair(gzipDataPipe);
 
 	signal(SIGPIPE, SIG_IGN); /* we only want EPIPE on errors */
-
-# if defined(__GNUC__) && __GNUC__
-	/* Avoid vfork clobbering */
-	(void) &zip_exec;
-# endif
 
 	gzipPid = xvfork();
 
@@ -711,7 +648,7 @@ static void NOINLINE vfork_compressor(int tar_fd, int gzip)
 		xmove_fd(gzipDataPipe.rd, 0);
 		xmove_fd(tar_fd, 1);
 		/* exec gzip/bzip2 program/applet */
-		BB_EXECLP(zip_exec, zip_exec, "-f", (char *)0);
+		BB_EXECLP(gzip, gzip, "-f", (char *)0);
 		vfork_exec_errno = errno;
 		_exit(EXIT_FAILURE);
 	}
@@ -734,17 +671,21 @@ static void NOINLINE vfork_compressor(int tar_fd, int gzip)
 # endif
 	if (vfork_exec_errno) {
 		errno = vfork_exec_errno;
-		bb_perror_msg_and_die("can't execute '%s'", zip_exec);
+		bb_perror_msg_and_die("can't execute '%s'", gzip);
 	}
 }
-#endif /* ENABLE_FEATURE_SEAMLESS_GZ || ENABLE_FEATURE_SEAMLESS_BZ2 */
+#endif /* SEAMLESS_COMPRESSION */
 
 
+#if !SEAMLESS_COMPRESSION
+/* Do not pass gzip flag to writeTarFile() */
+#define writeTarFile(tar_fd, verboseFlag, recurseFlags, include, exclude, gzip) \
+	writeTarFile(tar_fd, verboseFlag, recurseFlags, include, exclude)
+#endif
 /* gcc 4.2.1 inlines it, making code bigger */
 static NOINLINE int writeTarFile(int tar_fd, int verboseFlag,
-	unsigned optFlags,
 	int recurseFlags, const llist_t *include,
-	const llist_t *exclude, int gzip)
+	const llist_t *exclude, const char *gzip)
 {
 	int errorFlag = FALSE;
 	struct TarBallInfo tbInfo;
@@ -752,13 +693,12 @@ static NOINLINE int writeTarFile(int tar_fd, int verboseFlag,
 	tbInfo.hlInfoHead = NULL;
 	tbInfo.tarFd = tar_fd;
 	tbInfo.verboseFlag = verboseFlag;
-	tbInfo.optFlags = optFlags;
 
 	/* Store the stat info for the tarball's file, so
 	 * can avoid including the tarball into itself....  */
 	xfstat(tbInfo.tarFd, &tbInfo.tarFileStatBuf, "can't stat tar file");
 
-#if ENABLE_FEATURE_SEAMLESS_GZ || ENABLE_FEATURE_SEAMLESS_BZ2
+#if SEAMLESS_COMPRESSION
 	if (gzip)
 		vfork_compressor(tbInfo.tarFd, gzip);
 #endif
@@ -793,7 +733,7 @@ static NOINLINE int writeTarFile(int tar_fd, int verboseFlag,
 	if (errorFlag)
 		bb_error_msg("error exit delayed from previous errors");
 
-#if ENABLE_FEATURE_SEAMLESS_GZ || ENABLE_FEATURE_SEAMLESS_BZ2
+#if SEAMLESS_COMPRESSION
 	if (gzip) {
 		int status;
 		if (safe_waitpid(-1, &status, 0) == -1)
@@ -805,12 +745,9 @@ static NOINLINE int writeTarFile(int tar_fd, int verboseFlag,
 #endif
 	return errorFlag;
 }
-#else
-int writeTarFile(int tar_fd, int verboseFlag,
-	unsigned optFlags,
-	int recurseFlags, const llist_t *include,
-	const llist_t *exclude, int gzip);
-#endif /* FEATURE_TAR_CREATE */
+#else /* !FEATURE_TAR_CREATE */
+# define writeTarFile(...) 0
+#endif
 
 #if ENABLE_FEATURE_TAR_FROM
 static llist_t *append_file_list_to_list(llist_t *list)
@@ -843,7 +780,6 @@ static llist_t *append_file_list_to_list(llist_t *list)
 //usage:	IF_FEATURE_SEAMLESS_LZMA("a")
 //usage:	IF_FEATURE_TAR_CREATE("h")
 //usage:	IF_FEATURE_TAR_NOPRESERVE_TIME("m")
-//usage:	IF_FEATURE_TAR_SELINUX("p")
 //usage:	"vO] "
 //usage:	IF_FEATURE_TAR_FROM("[-X FILE] [-T FILE] ")
 //usage:	"[-f TARFILE] [-C DIR] [FILE]..."
@@ -888,9 +824,6 @@ static llist_t *append_file_list_to_list(llist_t *list)
 //usage:	)
 //usage:     "\n	X	File with names to exclude"
 //usage:     "\n	T	File with names to include"
-//usage:	)
-//usage:	IF_FEATURE_TAR_SELINUX(
-//usage:     "\n	p	Store SELinux contexts"
 //usage:	)
 //usage:
 //usage:#define tar_example_usage
@@ -1127,11 +1060,6 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 	if (opt & OPT_NOPRESERVE_PERM)
 		tar_handle->ah_flags |= ARCHIVE_DONT_RESTORE_PERM;
 
-#if ENABLE_FEATURE_TAR_SELINUX
-	if (opt & OPT_P)
-		tar_handle->ah_flags |= ARCHIVE_STORE_SELINUX;
-#endif
-
 	if (opt & OPT_OVERWRITE) {
 		tar_handle->ah_flags &= ~ARCHIVE_UNLINK_OLD;
 		tar_handle->ah_flags |= ARCHIVE_O_TRUNC;
@@ -1203,22 +1131,27 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 	if (base_dir)
 		xchdir(base_dir);
 
-	//if (SEAMLESS_COMPRESSION || OPT_COMPRESS)
+	//if (SEAMLESS_COMPRESSION)
 	//	/* We need to know whether child (gzip/bzip/etc) exits abnormally */
 	//	signal(SIGCHLD, check_errors_in_children);
 
 	/* Create an archive */
 	if (opt & OPT_CREATE) {
-#if ENABLE_FEATURE_SEAMLESS_GZ || ENABLE_FEATURE_SEAMLESS_BZ2
-		int zipMode = 0;
-		if (ENABLE_FEATURE_SEAMLESS_GZ && (opt & OPT_GZIP))
-			zipMode = 1;
-		if (ENABLE_FEATURE_SEAMLESS_BZ2 && (opt & OPT_BZIP2))
-			zipMode = 2;
+#if SEAMLESS_COMPRESSION
+		const char *zipMode = NULL;
+		if (opt & OPT_COMPRESS)
+			zipMode = "compress";
+		if (opt & OPT_GZIP)
+			zipMode = "gzip";
+		if (opt & OPT_BZIP2)
+			zipMode = "bzip2";
+		if (opt & OPT_LZMA)
+			zipMode = "lzma";
+		if (opt & OPT_XZ)
+			zipMode = "xz";
 #endif
 		/* NB: writeTarFile() closes tar_handle->src_fd */
 		return writeTarFile(tar_handle->src_fd, verboseFlag,
-				tar_handle->ah_flags,
 				(opt & OPT_DEREFERENCE ? ACTION_FOLLOWLINKS : 0)
 				| (opt & OPT_NORECURSION ? 0 : ACTION_RECURSE),
 				tar_handle->accept,
@@ -1226,7 +1159,7 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 	}
 
 	if (opt & OPT_ANY_COMPRESS) {
-		USE_FOR_MMU(IF_DESKTOP(long long) int FAST_FUNC (*xformer)(transformer_aux_data_t *aux, int src_fd, int dst_fd);)
+		USE_FOR_MMU(IF_DESKTOP(long long) int FAST_FUNC (*xformer)(transformer_state_t *xstate);)
 		USE_FOR_NOMMU(const char *xformer_prog;)
 
 		if (opt & OPT_COMPRESS)
@@ -1245,7 +1178,7 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 			USE_FOR_MMU(xformer = unpack_xz_stream;)
 			USE_FOR_NOMMU(xformer_prog = "unxz";)
 
-		open_transformer_with_sig(tar_handle->src_fd, xformer, xformer_prog);
+		fork_transformer_with_sig(tar_handle->src_fd, xformer, xformer_prog);
 		/* Can't lseek over pipes */
 		tar_handle->seek = seek_by_read;
 		/*tar_handle->offset = 0; - already is */

@@ -21,7 +21,7 @@
 
 #define OPT_v (1 << 0)
 
-#define BUFSIZE (8 * 1024)
+#define BUFSIZE (4 * 1024)
 
 static void progress(int mode, uoff_t count, uoff_t total)
 {
@@ -49,7 +49,7 @@ int flashcp_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int flashcp_main(int argc UNUSED_PARAM, char **argv)
 {
 	int fd_f, fd_d; /* input file and mtd device file descriptors */
-	unsigned i;
+	int i;
 	uoff_t erase_count;
 	struct mtd_info_user mtd;
 	struct erase_info_user e;

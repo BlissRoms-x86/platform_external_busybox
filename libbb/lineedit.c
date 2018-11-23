@@ -133,7 +133,7 @@ struct lineedit_statics {
 	unsigned cmdedit_y;        /* pseudoreal y (row) terminal position */
 	unsigned cmdedit_prmt_len; /* length of prompt (without colors etc) */
 
-	int cursor;
+	unsigned cursor;
 	int command_len; /* must be signed */
 	/* signed maxsize: we want x in "if (x > S.maxsize)"
 	 * to _not_ be promoted to unsigned */
@@ -221,7 +221,7 @@ static size_t load_string(const char *src)
 		return len;
 	} else {
 		unsigned i = 0;
-		while (src[i] && i < (unsigned) S.maxsize - 1) {
+		while (src[i] && i < S.maxsize - 1) {
 			command_ps[i] = src[i];
 			i++;
 		}
@@ -445,7 +445,7 @@ static void put_prompt(void)
 /* (optimized for slow terminals) */
 static void input_backward(unsigned num)
 {
-	if (num > (unsigned) cursor)
+	if (num > cursor)
 		num = cursor;
 	if (num == 0)
 		return;
@@ -500,7 +500,7 @@ static void input_backward(unsigned num)
 		 * A simpler thing to do is to redraw everything from the start
 		 * up to new cursor position (which is already known):
 		 */
-		int sv_cursor;
+		unsigned sv_cursor;
 		/* go to 1st column; go up to first line */
 		printf("\r" ESC"[%uA", cmdedit_y);
 		cmdedit_y = 0;
@@ -672,23 +672,20 @@ static char *username_path_completion(char *ud)
  */
 static NOINLINE unsigned complete_username(const char *ud)
 {
-	/* Using _r function to avoid pulling in static buffers */
-	char line_buff[256];
-	struct passwd pwd;
-	struct passwd *result;
+	struct passwd *pw;
 	unsigned userlen;
 
 	ud++; /* skip ~ */
 	userlen = strlen(ud);
 
 	setpwent();
-	while (!getpwent_r(&pwd, line_buff, sizeof(line_buff), &result)) {
+	while ((pw = getpwent()) != NULL) {
 		/* Null usernames should result in all users as possible completions. */
-		if (/*!userlen || */ strncmp(ud, pwd.pw_name, userlen) == 0) {
-			add_match(xasprintf("~%s/", pwd.pw_name));
+		if (/* !ud[0] || */ is_prefixed_with(pw->pw_name, ud)) {
+			add_match(xasprintf("~%s/", pw->pw_name));
 		}
 	}
-	endpwent();
+	endpwent(); /* don't keep password file open */
 
 	return 1 + userlen;
 }
@@ -795,7 +792,7 @@ static NOINLINE unsigned complete_cmd_dir_file(const char *command, int type)
 			if (!pfind[0] && DOT_OR_DOTDOT(name_found))
 				continue;
 			/* match? */
-			if (strncmp(name_found, pfind, pf_len) != 0)
+			if (!is_prefixed_with(name_found, pfind))
 				continue; /* no */
 
 			found = concat_path_file(paths[i], name_found);
@@ -1076,7 +1073,7 @@ static NOINLINE void input_tab(smallint *lastWasTab)
 	char *match_buf;
 	size_t len_found;
 	/* Length of string used for matching */
-	unsigned match_pfx_len = 0;
+	unsigned match_pfx_len = match_pfx_len;
 	int find_type;
 # if ENABLE_UNICODE_SUPPORT
 	/* cursor pos in command converted to multibyte form */
@@ -1322,7 +1319,7 @@ static int get_next_history(void)
 /* Lists command history. Used by shell 'history' builtins */
 void FAST_FUNC show_history(const line_input_t *st)
 {
-	unsigned i;
+	int i;
 
 	if (!st)
 		return;
@@ -1424,8 +1421,7 @@ void save_history(line_input_t *st)
 
 	fp = fopen(st->hist_file, "a");
 	if (fp) {
-		int fd;
-		unsigned i;
+		int i, fd;
 		char *new_name;
 		line_input_t *st_temp;
 
@@ -1494,7 +1490,7 @@ static void save_history(char *str)
 		fd = open(new_name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 		if (fd >= 0) {
 			FILE *fp;
-			unsigned i;
+			int i;
 
 			fp = xfdopen_for_write(fd);
 			for (i = 0; i < st_temp->cnt_history; i++)
@@ -1515,7 +1511,7 @@ static void save_history(char *str)
 
 static void remember_in_history(char *str)
 {
-	unsigned i;
+	int i;
 
 	if (!(state->flags & DO_HISTORY))
 		return;
@@ -1883,15 +1879,16 @@ static void parse_and_put_prompt(const char *prmt_ptr)
 						cwd_buf = xrealloc_getcwd_or_warn(NULL);
 						if (!cwd_buf)
 							cwd_buf = (char *)bb_msg_unknown;
-						else {
+						else if (home_pwd_buf[0]) {
+							char *after_home_user;
+
 							/* /home/user[/something] -> ~[/something] */
-							l = strlen(home_pwd_buf);
-							if (l != 0
-							 && strncmp(home_pwd_buf, cwd_buf, l) == 0
-							 && (cwd_buf[l] == '/' || cwd_buf[l] == '\0')
+							after_home_user = is_prefixed_with(cwd_buf, home_pwd_buf);
+							if (after_home_user
+							 && (*after_home_user == '/' || *after_home_user == '\0')
 							) {
 								cwd_buf[0] = '~';
-								overlapping_strcpy(cwd_buf + 1, cwd_buf + l);
+								overlapping_strcpy(cwd_buf + 1, after_home_user);
 							}
 						}
 					}
@@ -1970,7 +1967,7 @@ static void cmdedit_setwidth(unsigned w, int redraw_flg)
 	cmdedit_termw = w;
 	if (redraw_flg) {
 		/* new y for current cursor */
-		unsigned new_y = (cursor + cmdedit_prmt_len) / w;
+		int new_y = (cursor + cmdedit_prmt_len) / w;
 		/* redraw */
 		redraw((new_y >= cmdedit_y ? new_y : cmdedit_y), command_len - cursor);
 		fflush_all();
@@ -2257,9 +2254,13 @@ int FAST_FUNC read_line_input(line_input_t *st, const char *prompt, char *comman
 	INIT_S();
 
 	if (tcgetattr(STDIN_FILENO, &initial_settings) < 0
-	 || !(initial_settings.c_lflag & ECHO)
+	 || (initial_settings.c_lflag & (ECHO|ICANON)) == ICANON
 	) {
-		/* Happens when e.g. stty -echo was run before */
+		/* Happens when e.g. stty -echo was run before.
+		 * But if ICANON is not set, we don't come here.
+		 * (example: interactive python ^Z-backgrounded,
+		 * tty is still in "raw mode").
+		 */
 		parse_and_put_prompt(prompt);
 		/* fflush_all(); - done by parse_and_put_prompt */
 		if (fgets(command, maxsize, stdin) == NULL)
@@ -2608,7 +2609,7 @@ int FAST_FUNC read_line_input(line_input_t *st, const char *prompt, char *comman
 			 * standard readline bindings (IOW: bash) do.
 			 * Often, Alt-<key> generates ESC-<key>.
 			 */
-			ic = lineedit_read_key(read_key_buffer, timeout);
+			ic = lineedit_read_key(read_key_buffer, 50);
 			switch (ic) {
 				//case KEYCODE_LEFT: - bash doesn't do this
 				case 'b':

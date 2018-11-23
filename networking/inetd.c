@@ -354,7 +354,7 @@ struct BUG_G_too_big {
 #define INIT_G() do { \
 	rlim_ofile_cur = OPEN_MAX; \
 	global_queuelen = 128; \
-	config_filename = "/etc/inetd.conf"; \
+	config_filename = "/system/etc/inetd.conf"; \
 } while (0)
 
 #if 1
@@ -645,7 +645,7 @@ static servtab_t *dup_servtab(servtab_t *sep)
 }
 
 /* gcc generates much more code if this is inlined */
-static servtab_t *parse_one_line(void)
+static NOINLINE servtab_t *parse_one_line(void)
 {
 	int argc;
 	char *token[6+MAXARGV];
@@ -675,6 +675,8 @@ static servtab_t *parse_one_line(void)
 			 * default host for the following lines. */
 			free(default_local_hostname);
 			default_local_hostname = sep->se_local_hostname;
+			/*sep->se_local_hostname = NULL; - redundant */
+			/* (we'll overwrite this field anyway) */
 			goto more;
 		}
 	} else
@@ -688,10 +690,10 @@ static servtab_t *parse_one_line(void)
  parse_err:
 		bb_error_msg("parse error on line %u, line is ignored",
 				parser->lineno);
-		free_servtab_strings(sep);
 		/* Just "goto more" can make sep to carry over e.g.
 		 * "rpc"-ness (by having se_rpcver_lo != 0).
 		 * We will be more paranoid: */
+		free_servtab_strings(sep);
 		free(sep);
 		goto new;
 	}
@@ -725,7 +727,7 @@ static servtab_t *parse_one_line(void)
 			goto parse_err;
 #endif
 		}
-		if (strncmp(arg, "rpc/", 4) == 0) {
+		if (is_prefixed_with(arg, "rpc/")) {
 #if ENABLE_FEATURE_INETD_RPC
 			unsigned n;
 			arg += 4;
@@ -815,7 +817,7 @@ static servtab_t *parse_one_line(void)
 	}
 #endif
 	argc = 0;
-	while ((arg = token[6+argc]) != NULL && argc < MAXARGV)
+	while (argc < MAXARGV && (arg = token[6+argc]) != NULL)
 		sep->se_argv[argc++] = xstrdup(arg);
 	/* Some inetd.conf files have no argv's, not even argv[0].
 	 * Fix them up.
@@ -1140,7 +1142,7 @@ int inetd_main(int argc UNUSED_PARAM, char **argv)
 	struct sigaction sa, saved_pipe_handler;
 	servtab_t *sep, *sep2;
 	struct passwd *pwd;
-	struct group *grp = NULL; /* for compiler */
+	struct group *grp = grp; /* for compiler */
 	int opt;
 	pid_t pid;
 	sigset_t omask;
@@ -1328,7 +1330,7 @@ int inetd_main(int argc UNUSED_PARAM, char **argv)
 					pid = vfork();
 
 				if (pid < 0) { /* fork error */
-					bb_perror_msg("vfork");
+					bb_perror_msg("vfork"+1);
 					sleep(1);
 					restore_sigmask(&omask);
 					maybe_close(new_udp_fd);
@@ -1385,6 +1387,7 @@ int inetd_main(int argc UNUSED_PARAM, char **argv)
 				int r;
 
 				close(new_udp_fd);
+				dbg("closed new_udp_fd:%d\n", new_udp_fd);
 				lsa = xzalloc_lsa(sep->se_family);
 				/* peek at the packet and remember peer addr */
 				r = recvfrom(ctrl, NULL, 0, MSG_PEEK|MSG_DONTWAIT,
@@ -1621,7 +1624,7 @@ static uint32_t machtime(void)
 	struct timeval tv;
 
 	gettimeofday(&tv, NULL);
-	return htonl((uint32_t)(tv.tv_sec + 2208988800UL));
+	return htonl((uint32_t)(tv.tv_sec + 2208988800));
 }
 /* ARGSUSED */
 static void FAST_FUNC machtime_stream(int s, servtab_t *sep UNUSED_PARAM)
@@ -1653,7 +1656,7 @@ static void FAST_FUNC daytime_stream(int s, servtab_t *sep UNUSED_PARAM)
 {
 	time_t t;
 
-	t = time(NULL);
+	time(&t);
 	fdprintf(s, "%.24s\r\n", ctime(&t));
 }
 static void FAST_FUNC daytime_dg(int s, servtab_t *sep)

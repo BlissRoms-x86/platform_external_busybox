@@ -14,9 +14,6 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 
 #if ENABLE_FEATURE_TAR_SELINUX
 	char *sctx = archive_handle->tar__sctx[PAX_NEXT_FILE];
-#ifdef __BIONIC__
-	matchpathcon_init(NULL);
-#endif
 	if (!sctx)
 		sctx = archive_handle->tar__sctx[PAX_GLOBAL];
 	if (sctx) { /* setfscreatecon is 4 syscalls, avoid if possible */
@@ -71,7 +68,7 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 				bb_perror_msg_and_die("can't stat old file");
 			}
 		}
-		else if ((time_t) existing_sb.st_mtime >= (time_t) file_header->mtime) {
+		else if (existing_sb.st_mtime >= file_header->mtime) {
 			if (!(archive_handle->ah_flags & ARCHIVE_EXTRACT_QUIET)
 			 && !S_ISDIR(file_header->mode)
 			) {

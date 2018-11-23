@@ -22,9 +22,6 @@
 #include "libbb.h"
 #include "modutils.h"
 
-#if defined(ANDROID) || defined(__ANDROID__)
-#define DONT_USE_UTS_REL_FOLDER
-#endif
 
 enum {
 	OPT_TAGS = (1 << 12) - 1, /* shortcut count */
@@ -37,14 +34,14 @@ struct modinfo_env {
 	int tags;
 };
 
-static int display(const char *data, const char *pattern, int flag)
+static void display(const char *data, const char *pattern, int flag)
 {
 	if (flag) {
 		int n = printf("%s:", pattern);
 		while (n++ < 16)
 			bb_putchar(' ');
 	}
-	return printf("%s%c", data, (option_mask32 & OPT_0) ? '\0' : '\n');
+	printf("%s%c", data, (option_mask32 & OPT_0) ? '\0' : '\n');
 }
 
 static void modinfo(const char *path, const char *version,
@@ -65,8 +62,8 @@ static void modinfo(const char *path, const char *version,
 		"firmware",
 	};
 	size_t len;
-	int j, length;
-	char *ptr, *fullpath, *the_module;
+	int j;
+	char *ptr, *the_module;
 	const char *field = env->field;
 	int tags = env->tags;
 
@@ -80,21 +77,11 @@ static void modinfo(const char *path, const char *version,
 		if (path[0] == '/')
 			return;
 		/* Newer depmod puts relative paths in modules.dep */
-		fullpath = xasprintf("%s/%s/%s", CONFIG_DEFAULT_MODULES_DIR, version, path);
-		the_module = xmalloc_open_zipped_read_close(fullpath, &len);
-#ifdef DONT_USE_UTS_REL_FOLDER
-		if (!the_module) {
-			free((char*)fullpath);
-			fullpath = xasprintf("%s/%s", CONFIG_DEFAULT_MODULES_DIR, path);
-			the_module = xmalloc_open_zipped_read_close(fullpath, &len);
-		}
-#endif
-		free((char*)fullpath);
-		if (!the_module) {
-			// outputs system error msg
-			bb_perror_msg("\n");
+		path = xasprintf("%s/%s/%s", CONFIG_DEFAULT_MODULES_DIR, version, path);
+		the_module = xmalloc_open_zipped_read_close(path, &len);
+		free((char*)path);
+		if (!the_module)
 			return;
-		}
 	}
 
 	if (field)
@@ -107,17 +94,20 @@ static void modinfo(const char *path, const char *version,
 		pattern = field;
 		if ((1<<j) & OPT_TAGS)
 			pattern = shortcuts[j];
-		length = strlen(pattern);
 		ptr = the_module;
 		while (1) {
+			char *after_pattern;
+
 			ptr = memchr(ptr, *pattern, len - (ptr - (char*)the_module));
 			if (ptr == NULL) /* no occurance left, done */
 				break;
-			if (strncmp(ptr, pattern, length) == 0 && ptr[length] == '=') {
+			after_pattern = is_prefixed_with(ptr, pattern);
+			if (after_pattern && *after_pattern == '=') {
 				/* field prefixes are 0x80 or 0x00 */
-				if ((ptr[-1] & 0x7F) == '\0') {
-					ptr += length + 1;
-					ptr += display(ptr, pattern, (1<<j) != tags);
+				if ((ptr[-1] & 0x7F) == 0x00) {
+					ptr = after_pattern + 1;
+					display(ptr, pattern, (1<<j) != tags);
+					ptr += strlen(ptr);
 				}
 			}
 			++ptr;
@@ -158,28 +148,15 @@ int modinfo_main(int argc UNUSED_PARAM, char **argv)
 	uname(&uts);
 	parser = config_open2(
 		xasprintf("%s/%s/%s", CONFIG_DEFAULT_MODULES_DIR, uts.release, CONFIG_DEFAULT_DEPMOD_FILE),
-		fopen_for_read
+		xfopen_for_read
 	);
-
-#ifdef DONT_USE_UTS_REL_FOLDER
-	if (!parser) {
-		parser = config_open2(
-			xasprintf("%s/%s", CONFIG_DEFAULT_MODULES_DIR, CONFIG_DEFAULT_DEPMOD_FILE),
-			fopen_for_read
-		);
-	}
-#endif
-	if (!parser) {
-		strcpy(uts.release,"");
-		goto no_modules_dep;
-	}
 
 	while (config_read(parser, tokens, 2, 1, "# \t", PARSE_NORMAL)) {
 		colon = last_char_is(tokens[0], ':');
 		if (colon == NULL)
 			continue;
 		*colon = '\0';
-		filename2modname(tokens[0], name);
+		filename2modname(bb_basename(tokens[0]), name);
 		for (i = 0; argv[i]; i++) {
 			if (fnmatch(argv[i], name, 0) == 0) {
 				modinfo(tokens[0], uts.release, &env);
@@ -190,7 +167,6 @@ int modinfo_main(int argc UNUSED_PARAM, char **argv)
 	if (ENABLE_FEATURE_CLEAN_UP)
 		config_close(parser);
 
-no_modules_dep:
 	for (i = 0; argv[i]; i++) {
 		if (argv[i][0]) {
 			modinfo(argv[i], uts.release, &env);

@@ -91,7 +91,7 @@
 //PROCESS_ACCOUNTING="no"
 //
 //# Tarball for the various boot log files
-//BOOTLOG_DEST=/var/log/bootchart.tgz
+//BOOTLOG_DEST=/data/bootchart.tgz
 //
 //# Whether to automatically stop logging as the boot process completes.
 //# The logger will look for known processes that indicate bootup completion
@@ -108,7 +108,7 @@
 //AUTO_RENDER_FORMAT="png"
 //
 //# Output directory for auto-generated boot charts
-//AUTO_RENDER_DIR="/var/log"
+//AUTO_RENDER_DIR="/data"
 
 
 /* Globals */
@@ -313,7 +313,7 @@ static void finalize(char *tempdir, const char *prog, int process_accounting)
 	fclose(header_fp);
 
 	/* Package log files */
-	system(xasprintf("tar -zcf /var/log/bootlog.tgz header %s *.log", process_accounting ? "kernel_pacct" : ""));
+	system(xasprintf("tar -zcf /data/bootlog.tgz header %s *.log", process_accounting ? "kernel_pacct" : ""));
 	/* Clean up (if we are not in detached tmpfs) */
 	if (tempdir) {
 		unlink("header");
@@ -334,7 +334,7 @@ static void finalize(char *tempdir, const char *prog, int process_accounting)
 //usage:#define bootchartd_trivial_usage
 //usage:       "start [PROG ARGS]|stop|init"
 //usage:#define bootchartd_full_usage "\n\n"
-//usage:       "Create /var/log/bootchart.tgz with boot chart data\n"
+//usage:       "Create /data/bootchart.tgz with boot chart data\n"
 //usage:     "\nstart: start background logging; with PROG, run PROG, then kill logging with USR1"
 //usage:     "\nstop: send USR1 to all bootchartd processes"
 //usage:     "\ninit: start background logging; stop when getty/xdm is seen (for init scripts)"
@@ -383,9 +383,9 @@ int bootchartd_main(int argc UNUSED_PARAM, char **argv)
 	process_accounting = 0;
 	if (ENABLE_FEATURE_BOOTCHARTD_CONFIG_FILE) {
 		char* token[2];
-		parser_t *parser = config_open2("/etc/bootchartd.conf" + 5, fopen_for_read);
+		parser_t *parser = config_open2("/system/etc/bootchartd.conf" + 5, fopen_for_read);
 		if (!parser)
-			parser = config_open2("/etc/bootchartd.conf", fopen_for_read);
+			parser = config_open2("/system/etc/bootchartd.conf", fopen_for_read);
 		while (config_read(parser, token, 2, 0, "#=", PARSE_NORMAL & ~PARSE_COLLAPSE)) {
 			if (strcmp(token[0], "SAMPLE_PERIOD") == 0 && token[1])
 				sample_period_us = atof(token[1]) * 1000000;

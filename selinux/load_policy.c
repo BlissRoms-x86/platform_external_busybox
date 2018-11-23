@@ -19,7 +19,11 @@ int load_policy_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 		bb_show_usage();
 	}
 
+#ifdef __ANDROID__
+	rc = selinux_android_load_policy();
+#else
 	rc = selinux_mkload_policy(1);
+#endif
 	if (rc < 0) {
 		bb_perror_msg_and_die("can't load policy");
 	}

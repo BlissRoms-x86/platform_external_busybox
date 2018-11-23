@@ -15,8 +15,11 @@
 #include <sys/utsname.h>
 #include <fnmatch.h>
 
-//#define DBG(fmt, ...) bb_error_msg("%s: " fmt, __func__, ## __VA_ARGS__)
+#if 1
 #define DBG(...) ((void)0)
+#else
+#define DBG(fmt, ...) bb_error_msg("%s: " fmt, __func__, ## __VA_ARGS__)
+#endif
 
 /* Note that unlike older versions of modules.dep/depmod (busybox and m-i-t),
  * we expect the full dependency list to be specified in modules.dep.
@@ -24,7 +27,7 @@
  */
 
 
-//usage:#if !ENABLE_MODPROBE_SMALL && !ENABLE_FEATURE_MODPROBE_SMALL_OPTIONS_ON_CMDLINE
+//usage:#if !ENABLE_MODPROBE_SMALL
 //usage:#define modprobe_notes_usage
 //usage:	"modprobe can (un)load a stack of modules, passing each module options (when\n"
 //usage:	"loading). modprobe uses a configuration file to determine what option(s) to\n"
@@ -40,7 +43,7 @@
 //usage:	"_not_ an error; each loaded module is then expected to load without\n"
 //usage:	"options. Once a file is found, the others are tested for.\n"
 //usage:	"\n"
-//usage:	"/etc/modules.conf entry format:\n"
+//usage:	"/system/etc/modules.conf entry format:\n"
 //usage:	"\n"
 //usage:	"  alias <alias_name> <mod_name>\n"
 //usage:	"    Makes it possible to modprobe alias_name, when there is no such module.\n"
@@ -87,7 +90,7 @@
 //usage:
 //usage:#define modprobe_trivial_usage
 //usage:	"[-alrqvsD" IF_FEATURE_MODPROBE_BLACKLIST("b") "]"
-//usage:	" MODULE [symbol=value]..."
+//usage:	" MODULE [SYMBOL=VALUE]..."
 //usage:#define modprobe_full_usage "\n\n"
 //usage:       "	-a	Load multiple MODULEs"
 //usage:     "\n	-l	List (MODULE is a pattern)"
@@ -146,10 +149,6 @@ static const char modprobe_longopts[] ALIGN1 =
 /* "was seen in modules.dep": */
 #define MODULE_FLAG_FOUND_IN_MODDEP     0x0004
 #define MODULE_FLAG_BLACKLISTED         0x0008
-
-#if defined(ANDROID) || defined(__ANDROID__)
-#define DONT_USE_UTS_REL_FOLDER
-#endif
 
 struct module_entry { /* I'll call it ME. */
 	unsigned flags;
@@ -233,9 +232,14 @@ static ALWAYS_INLINE struct module_entry *get_or_add_modentry(const char *module
 {
 	return helper_get_module(module, 1);
 }
-static ALWAYS_INLINE struct module_entry *get_modentry(const char *module)
+/* So far this function always gets a module pathname, never an alias name.
+ * The crucial difference is that pathname needs dirname stripping,
+ * while alias name must NOT do it!
+ * Testcase where dirname stripping is likely to go wrong: "modprobe devname:snd/timer"
+ */
+static ALWAYS_INLINE struct module_entry *get_modentry(const char *pathname)
 {
-	return helper_get_module(module, 0);
+	return helper_get_module(bb_get_last_path_component_nostrip(pathname), 0);
 }
 
 static void add_probe(const char *name)
@@ -256,7 +260,7 @@ static void add_probe(const char *name)
 	llist_add_to_end(&G.probes, m);
 	G.num_unresolved_deps++;
 	if (ENABLE_FEATURE_MODUTILS_SYMBOLS
-	 && strncmp(m->modname, "symbol:", 7) == 0
+	 && is_prefixed_with(m->modname, "symbol:")
 	) {
 		G.need_symbols = 1;
 	}
@@ -344,27 +348,55 @@ static const char *humanly_readable_name(struct module_entry *m)
 	return m->probed_name ? m->probed_name : m->modname;
 }
 
+/* Like strsep(&stringp, "\n\t ") but quoted text goes to single token
+ * even if it contains whitespace.
+ */
+static char *strsep_quotes(char **stringp)
+{
+	char *s, *start = *stringp;
+
+	if (!start)
+		return NULL;
+
+	for (s = start; ; s++) {
+		switch (*s) {
+		case '"':
+			s = strchrnul(s + 1, '"'); /* find trailing quote */
+			if (*s != '\0')
+				s++; /* skip trailing quote */
+			/* fall through */
+		case '\0':
+		case '\n':
+		case '\t':
+		case ' ':
+			if (*s != '\0') {
+				*s = '\0';
+				*stringp = s + 1;
+			} else {
+				*stringp = NULL;
+			}
+			return start;
+		}
+	}
+}
+
 static char *parse_and_add_kcmdline_module_options(char *options, const char *modulename)
 {
 	char *kcmdline_buf;
 	char *kcmdline;
 	char *kptr;
-	int len;
 
 	kcmdline_buf = xmalloc_open_read_close("/proc/cmdline", NULL);
 	if (!kcmdline_buf)
 		return options;
 
 	kcmdline = kcmdline_buf;
-	len = strlen(modulename);
-	while ((kptr = strsep(&kcmdline, "\n\t ")) != NULL) {
-		if (strncmp(modulename, kptr, len) != 0)
-			continue;
-		kptr += len;
-		if (*kptr != '.')
+	while ((kptr = strsep_quotes(&kcmdline)) != NULL) {
+		char *after_modulename = is_prefixed_with(kptr, modulename);
+		if (!after_modulename || *after_modulename != '.')
 			continue;
 		/* It is "modulename.xxxx" */
-		kptr++;
+		kptr = after_modulename + 1;
 		if (strchr(kptr, '=') != NULL) {
 			/* It is "modulename.opt=[val]" */
 			options = gather_options_str(options, kptr);
@@ -421,7 +453,7 @@ static int do_modprobe(struct module_entry *m)
 
 		rc = 0;
 		fn = llist_pop(&m->deps); /* we leak it */
-		m2 = get_or_add_modentry(fn);
+		m2 = get_or_add_modentry(bb_get_last_path_component_nostrip(fn));
 
 		if (option_mask32 & OPT_REMOVE) {
 			/* modprobe -r */
@@ -450,17 +482,10 @@ static int do_modprobe(struct module_entry *m)
 			options = gather_options_str(options, G.cmdline_mopts);
 
 		if (option_mask32 & OPT_SHOW_DEPS) {
-#ifndef DONT_USE_UTS_REL_FOLDER
 			printf(options ? "insmod %s/%s/%s %s\n"
 					: "insmod %s/%s/%s\n",
 				CONFIG_DEFAULT_MODULES_DIR, G.uts.release, fn,
 				options);
-#else
-			printf(options ? "insmod %s/%s %s\n"
-					: "insmod %s/%s\n",
-				CONFIG_DEFAULT_MODULES_DIR, fn,
-				options);
-#endif
 			free(options);
 			continue;
 		}
@@ -510,7 +535,7 @@ static void load_modules_dep(void)
 		colon = last_char_is(tokens[0], ':');
 		if (colon == NULL)
 			continue;
-		*colon = 0;
+		*colon = '\0';
 
 		m = get_modentry(tokens[0]);
 		if (m == NULL)
@@ -542,7 +567,6 @@ int modprobe_main(int argc UNUSED_PARAM, char **argv)
 	int rc;
 	unsigned opt;
 	struct module_entry *me;
-	struct stat info;
 
 	INIT_G();
 
@@ -553,16 +577,11 @@ int modprobe_main(int argc UNUSED_PARAM, char **argv)
 
 	/* Goto modules location */
 	xchdir(CONFIG_DEFAULT_MODULES_DIR);
-#ifndef DONT_USE_UTS_REL_FOLDER
 	uname(&G.uts);
-	if (stat(G.uts.release, &info) == 0) {
-		xchdir(G.uts.release);
-	}
-#endif
+	xchdir(G.uts.release);
 
 	if (opt & OPT_LIST_ONLY) {
 		int i;
-		char name[MODULE_NAME_LEN];
 		char *colon, *tokens[2];
 		parser_t *p = config_open2(CONFIG_DEFAULT_DEPMOD_FILE, xfopen_for_read);
 
@@ -574,10 +593,14 @@ int modprobe_main(int argc UNUSED_PARAM, char **argv)
 			if (!colon)
 				continue;
 			*colon = '\0';
-			filename2modname(tokens[0], name);
 			if (!argv[0])
 				puts(tokens[0]);
 			else {
+				char name[MODULE_NAME_LEN];
+				filename2modname(
+					bb_get_last_path_component_nostrip(tokens[0]),
+					name
+				);
 				for (i = 0; argv[i]; i++) {
 					if (fnmatch(argv[i], name, 0) == 0) {
 						puts(tokens[0]);
@@ -603,15 +626,6 @@ int modprobe_main(int argc UNUSED_PARAM, char **argv)
 		}
 		return EXIT_SUCCESS;
 	}
-
-	/* Goto modules location */
-	xchdir(CONFIG_DEFAULT_MODULES_DIR);
-#ifndef DONT_USE_UTS_REL_FOLDER
-	uname(&G.uts);
-	if (stat(G.uts.release, &info) == 0) {
-		xchdir(G.uts.release);
-	}
-#endif
 
 	/* Retrieve module names of already loaded modules */
 	{
@@ -639,8 +653,8 @@ int modprobe_main(int argc UNUSED_PARAM, char **argv)
 	if (G.probes == NULL)
 		return EXIT_SUCCESS;
 
-	read_config("/etc/modprobe.conf");
-	read_config("/etc/modprobe.d");
+	read_config("/system/etc/modprobe.conf");
+	read_config("/system/etc/modprobe.d");
 	if (ENABLE_FEATURE_MODUTILS_SYMBOLS && G.need_symbols)
 		read_config("modules.symbols");
 	load_modules_dep();

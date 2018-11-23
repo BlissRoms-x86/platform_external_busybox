@@ -15,8 +15,8 @@
 //usage:     "\n	-f	Run in foreground"
 //usage:     "\n	-c DIR	Config directory [/etc/acpi]"
 //usage:     "\n	-e FILE	/proc event file [/proc/acpi/event]"
-//usage:     "\n	-l FILE	Log file [/var/log/acpid.log]"
-//usage:     "\n	-p FILE	Pid file [/var/run/acpid.pid]"
+//usage:     "\n	-l FILE	Log file [/data/acpid.log]"
+//usage:     "\n	-p FILE	Pid file [/data/acpid.pid]"
 //usage:     "\n	-a FILE	Action file [/etc/acpid.conf]"
 //usage:     "\n	-M FILE Map file [/etc/acpi.map]"
 //usage:	IF_FEATURE_ACPID_COMPAT(
@@ -26,7 +26,7 @@
 //usage:#define acpid_example_usage
 //usage:       "Without -e option, acpid uses all /dev/input/event* files\n"
 //usage:       "# acpid\n"
-//usage:       "# acpid -l /var/log/my-acpi-log\n"
+//usage:       "# acpid -l /data/my-acpi-log\n"
 //usage:       "# acpid -e /proc/acpi/event\n"
 
 #include "libbb.h"
@@ -121,10 +121,8 @@ static void process_event(const char *event)
 	char *handler = xasprintf("./%s", event);
 	const char *args[] = { "run-parts", handler, NULL };
 
-	// debug info
-	if (option_mask32 & OPT_d) {
-		bb_error_msg("%s", event);
-	}
+	// log the event
+	bb_error_msg("%s", event);
 
 	// spawn handler
 	// N.B. run-parts would require scripts to have #!/bin/sh
@@ -153,7 +151,7 @@ static const char *find_action(struct input_event *ev, const char *buf)
 		}
 
 		if (buf) {
-			if (strncmp(buf, evt_tab[i].desc, strlen(buf)) == 0) {
+			if (is_prefixed_with(evt_tab[i].desc, buf)) {
 				action = evt_tab[i].desc;
 				break;
 			}
@@ -229,11 +227,11 @@ int acpid_main(int argc UNUSED_PARAM, char **argv)
 	int nfd;
 	int opts;
 	struct pollfd *pfd;
-	const char *opt_dir = "/etc/acpi";
+	const char *opt_dir = "/system/etc/acpi";
 	const char *opt_input = "/dev/input/event";
-	const char *opt_logfile = "/var/log/acpid.log";
-	const char *opt_action = "/etc/acpid.conf";
-	const char *opt_map = "/etc/acpi.map";
+	const char *opt_logfile = "/data/acpid.log";
+	const char *opt_action = "/system/etc/acpid.conf";
+	const char *opt_map = "/system/etc/acpi.map";
 #if ENABLE_FEATURE_PIDFILE
 	const char *opt_pidfile = CONFIG_PID_FILE_PATH "/acpid.pid";
 #endif
@@ -256,7 +254,7 @@ int acpid_main(int argc UNUSED_PARAM, char **argv)
 		/* No -d "Debug", we log to log file.
 		 * This includes any output from children.
 		 */
-		xmove_fd(xopen(opt_logfile, O_WRONLY | O_CREAT | O_TRUNC), STDOUT_FILENO);
+		xmove_fd(xopen(opt_logfile, O_WRONLY | O_CREAT | O_APPEND), STDOUT_FILENO);
 		xdup2(STDOUT_FILENO, STDERR_FILENO);
 		/* Also, acpid's messages (but not children) will go to syslog too */
 		openlog(applet_name, LOG_PID, LOG_DAEMON);

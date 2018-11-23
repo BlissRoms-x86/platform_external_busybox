@@ -65,6 +65,7 @@
 //usage:	IF_FEATURE_CPIO_P(
 //usage:     "\n	-p DIR	Copy files to DIR"
 //usage:	)
+//usage:     "\nOptions:"
 //usage:     "\n	-d	Make leading directories"
 //usage:     "\n	-m	Preserve mtime"
 //usage:     "\n	-v	Verbose"
@@ -256,7 +257,6 @@ static NOINLINE int cpio_o(void)
 				free(line);
 				continue;
 			}
-
 		} else { /* line == NULL: EOF */
  next_link:
 			if (links) {
@@ -480,7 +480,7 @@ int cpio_main(int argc UNUSED_PARAM, char **argv)
 	while (get_header_cpio(archive_handle) == EXIT_SUCCESS)
 		continue;
 
-	if ((off_t)archive_handle->cpio__blocks != (off_t)-1
+	if (archive_handle->cpio__blocks != (off_t)-1
 	 && !(opt & OPT_QUIET)
 	) {
 		fprintf(stderr, "%"OFF_FMT"u blocks\n", archive_handle->cpio__blocks);

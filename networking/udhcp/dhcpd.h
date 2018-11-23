@@ -12,7 +12,7 @@ PUSH_AND_SET_FUNCTION_VISIBILITY_TO_HIDDEN
 #define DEFAULT_LEASE_TIME      (60*60*24 * 10)
 #define LEASES_FILE             CONFIG_DHCPD_LEASES_FILE
 /* Where to find the DHCP server configuration file */
-#define DHCPD_CONF_FILE         "/etc/udhcpd.conf"
+#define DHCPD_CONF_FILE         "/system/etc/udhcpd.conf"
 
 
 struct static_lease {
@@ -100,7 +100,7 @@ struct dyn_lease *add_lease(
 int is_expired_lease(struct dyn_lease *lease) FAST_FUNC;
 struct dyn_lease *find_lease_by_mac(const uint8_t *mac) FAST_FUNC;
 struct dyn_lease *find_lease_by_nip(uint32_t nip) FAST_FUNC;
-uint32_t find_free_or_expired_nip(const uint8_t *safe_mac) FAST_FUNC;
+uint32_t find_free_or_expired_nip(const uint8_t *safe_mac, unsigned arpping_ms) FAST_FUNC;
 
 
 /* Config file parser will pass static lease info to this function

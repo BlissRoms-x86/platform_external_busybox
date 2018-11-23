@@ -94,7 +94,7 @@ static int sysctl_act_on_setting(char *setting)
 {
 	int fd, retval = EXIT_SUCCESS;
 	char *cptr, *outname;
-	char *value = NULL;
+	char *value = value; /* for compiler */
 
 	outname = xstrdup(setting);
 
@@ -129,6 +129,9 @@ static int sysctl_act_on_setting(char *setting)
 
 	if (fd < 0) {
 		switch (errno) {
+		case EACCES:
+			/* Happens for write-only settings, e.g. net.ipv6.route.flush */
+			goto end;
 		case ENOENT:
 			if (option_mask32 & FLAG_SHOW_KEY_ERRORS)
 				bb_error_msg("error: '%s' is an unknown key", outname);
@@ -263,7 +266,7 @@ int sysctl_main(int argc UNUSED_PARAM, char **argv)
 	if (opt & FLAG_PRELOAD_FILE) {
 		option_mask32 |= FLAG_WRITE;
 		/* xchdir("/proc/sys") is inside */
-		return sysctl_handle_preload_file(*argv ? *argv : "/etc/sysctl.conf");
+		return sysctl_handle_preload_file(*argv ? *argv : "/system/etc/sysctl.conf");
 	}
 	xchdir("/proc/sys");
 	/* xchroot("/proc/sys") - if you are paranoid */

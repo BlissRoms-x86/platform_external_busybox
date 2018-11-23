@@ -20,12 +20,17 @@
 //usage:     "\n	-D		Don't assign a password"
 //usage:     "\n	-H		Don't create home directory"
 //usage:     "\n	-u UID		User id"
+//usage:     "\n	-k SKEL		Skeleton directory (/etc/skel)"
 
 #include "libbb.h"
 
 #if CONFIG_LAST_SYSTEM_ID < CONFIG_FIRST_SYSTEM_ID
 #error Bad LAST_SYSTEM_ID or FIRST_SYSTEM_ID in .config
 #endif
+#if CONFIG_LAST_ID < CONFIG_LAST_SYSTEM_ID
+#error Bad LAST_ID or LAST_SYSTEM_ID in .config
+#endif
+
 
 /* #define OPT_HOME           (1 << 0) */ /* unused */
 /* #define OPT_GECOS          (1 << 1) */ /* unused */
@@ -35,13 +40,13 @@
 #define OPT_SYSTEM_ACCOUNT (1 << 5)
 #define OPT_DONT_MAKE_HOME (1 << 6)
 #define OPT_UID            (1 << 7)
+#define OPT_SKEL           (1 << 8)
 
-/* We assume UID_T_MAX == INT_MAX */
 /* remix */
 /* recoded such that the uid may be passed in *p */
 static void passwd_study(struct passwd *p)
 {
-	int max = UINT_MAX;
+	int max = CONFIG_LAST_ID;
 
 	if (getpwnam(p->pw_name)) {
 		bb_error_msg_and_die("%s '%s' in use", "user", p->pw_name);
@@ -54,7 +59,6 @@ static void passwd_study(struct passwd *p)
 			max = CONFIG_LAST_SYSTEM_ID;
 		} else {
 			p->pw_uid = CONFIG_LAST_SYSTEM_ID + 1;
-			max = 64999;
 		}
 	}
 	/* check for a free uid (and maybe gid) */
@@ -124,7 +128,9 @@ static void passwd_wrapper(const char *login_name)
 #if ENABLE_FEATURE_ADDUSER_LONG_OPTIONS
 static const char adduser_longopts[] ALIGN1 =
 		"home\0"                Required_argument "h"
+#ifdef HAVE_PW_GECOS
 		"gecos\0"               Required_argument "g"
+#endif
 		"shell\0"               Required_argument "s"
 		"ingroup\0"             Required_argument "G"
 		"disabled-password\0"   No_argument       "D"
@@ -132,6 +138,7 @@ static const char adduser_longopts[] ALIGN1 =
 		"system\0"              No_argument       "S"
 		"no-create-home\0"      No_argument       "H"
 		"uid\0"                 Required_argument "u"
+		"skel\0"                Required_argument "k"
 		;
 #endif
 
@@ -147,6 +154,8 @@ int adduser_main(int argc UNUSED_PARAM, char **argv)
 	const char *usegroup = NULL;
 	char *p;
 	unsigned opts;
+	char *uid;
+	const char *skel = "/system/etc/skel";
 
 #if ENABLE_FEATURE_ADDUSER_LONG_OPTIONS
 	applet_long_options = adduser_longopts;
@@ -154,26 +163,28 @@ int adduser_main(int argc UNUSED_PARAM, char **argv)
 
 	/* got root? */
 	if (geteuid()) {
-		bb_error_msg_and_die("%s", bb_msg_perm_denied_are_you_root);
+		bb_error_msg_and_die(bb_msg_perm_denied_are_you_root);
 	}
-
+#ifdef HAVE_PW_GECOS
 	pw.pw_gecos = (char *)"Linux User,,,";
+#endif
 	/* We assume that newly created users "inherit" root's shell setting */
 	pw.pw_shell = (char *)get_shell_name();
 	pw.pw_dir = NULL;
 
 	/* at least one and at most two non-option args */
 	/* disable interactive passwd for system accounts */
-	opt_complementary = "-1:?2:SD:u+";
-	if (sizeof(pw.pw_uid) == sizeof(int)) {
-		opts = getopt32(argv, "h:g:s:G:DSHu:", &pw.pw_dir, &pw.pw_gecos, &pw.pw_shell, &usegroup, &pw.pw_uid);
-	} else {
-		unsigned uid;
-		opts = getopt32(argv, "h:g:s:G:DSHu:", &pw.pw_dir, &pw.pw_gecos, &pw.pw_shell, &usegroup, &uid);
-		if (opts & OPT_UID) {
-			pw.pw_uid = uid;
-		}
-	}
+	opt_complementary = "-1:?2:SD";
+#ifdef HAVE_PW_GECOS
+	opts = getopt32(argv, "h:g:s:G:DSHu:k:", &pw.pw_dir, 
+		&pw.pw_gecos,
+#else
+	opts = getopt32(argv, "h:s:G:DSHu:k:", &pw.pw_dir, 
+#endif
+		&pw.pw_shell, &usegroup, &uid, &skel);
+	if (opts & OPT_UID)
+		pw.pw_uid = xatou_range(uid, 0, CONFIG_LAST_ID);
+
 	argv += optind;
 	pw.pw_name = argv[0];
 
@@ -204,9 +215,16 @@ int adduser_main(int argc UNUSED_PARAM, char **argv)
 	/* make sure everything is kosher and setup uid && maybe gid */
 	passwd_study(&pw);
 
+#ifdef HAVE_PW_GECOS
 	p = xasprintf("x:%u:%u:%s:%s:%s",
+#else
+	p = xasprintf("x:%u:%u:%s:%s",
+#endif
 			(unsigned) pw.pw_uid, (unsigned) pw.pw_gid,
-			pw.pw_gecos, pw.pw_dir, pw.pw_shell);
+#ifdef HAVE_PW_GECOS
+			pw.pw_gecos, 
+#endif
+			pw.pw_dir, pw.pw_shell);
 	if (update_passwd(bb_path_passwd_file, pw.pw_name, p, NULL) < 0) {
 		return EXIT_FAILURE;
 	}
@@ -252,8 +270,9 @@ int adduser_main(int argc UNUSED_PARAM, char **argv)
 				NULL
 			};
 			/* Be silent on any errors (like: no /etc/skel) */
-			logmode = LOGMODE_NONE;
-			copy_file("/etc/skel", pw.pw_dir, FILEUTILS_RECUR);
+			if (!(opts & OPT_SKEL))
+				logmode = LOGMODE_NONE;
+			copy_file(skel, pw.pw_dir, FILEUTILS_RECUR);
 			logmode = LOGMODE_STDIO;
 			chown_main(4, (char**)args);
 		}

@@ -40,20 +40,16 @@ const char bb_default_login_shell[] ALIGN1 = LIBBB_DEFAULT_LOGIN_SHELL;
 /* util-linux manpage says /sbin:/bin:/usr/sbin:/usr/bin,
  * but I want to save a few bytes here. Check libbb.h before changing! */
 const char bb_PATH_root_path[] ALIGN1 =
-#ifdef __BIONIC__
-	"PATH=/sbin" BB_ADDITIONAL_PATH; /* platform.h */
-#else
 	"PATH=/sbin:/usr/sbin:/bin:/usr/bin" BB_ADDITIONAL_PATH;
-#endif
 
 
-const int const_int_1 = 1;
+//const int const_int_1 = 1;
 /* explicitly = 0, otherwise gcc may make it a common variable
  * and it will end up in bss */
 const int const_int_0 = 0;
 
 #if ENABLE_FEATURE_WTMP
-/* This is usually something like "/var/adm/wtmp" or "/var/log/wtmp" */
+/* This is usually something like "/var/adm/wtmp" or "/data/wtmp" */
 const char bb_path_wtmp_file[] ALIGN1 =
 # if defined _PATH_WTMP
 	_PATH_WTMP;

@@ -38,7 +38,7 @@ static const char *const tar_var[] = {
 static void xputenv(char *str)
 {
 	if (putenv(str))
-		bb_error_msg_and_die("%s", bb_msg_memory_exhausted);
+		bb_error_msg_and_die(bb_msg_memory_exhausted);
 }
 
 static void str2env(char *env[], int idx, const char *str)
@@ -63,7 +63,7 @@ void FAST_FUNC data_extract_to_command(archive_handle_t *archive_handle)
 {
 	file_header_t *file_header = archive_handle->file_header;
 
-#if ENABLE_FEATURE_TAR_SELINUX
+#if 0 /* do we need this? ENABLE_FEATURE_TAR_SELINUX */
 	char *sctx = archive_handle->tar__sctx[PAX_NEXT_FILE];
 	if (!sctx)
 		sctx = archive_handle->tar__sctx[PAX_GLOBAL];
@@ -118,7 +118,7 @@ void FAST_FUNC data_extract_to_command(archive_handle_t *archive_handle)
 			bb_error_msg_and_die("'%s' returned status %d",
 				archive_handle->tar__to_command, WEXITSTATUS(status));
 		if (WIFSIGNALED(status))
-			bb_error_msg_and_die("'%s' terminated on signal %d",
+			bb_error_msg_and_die("'%s' terminated by signal %d",
 				archive_handle->tar__to_command, WTERMSIG(status));
 
 		if (!BB_MMU) {

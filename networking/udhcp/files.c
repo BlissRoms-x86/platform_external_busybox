@@ -75,7 +75,7 @@ static const struct config_keyword keywords[] = {
 	{"offer_time"   , read_u32        , &server_config.offer_time   , "60"},
 	{"min_lease"    , read_u32        , &server_config.min_lease_sec, "60"},
 	{"lease_file"   , read_str        , &server_config.lease_file   , LEASES_FILE},
-	{"pidfile"      , read_str        , &server_config.pidfile      , "/var/run/udhcpd.pid"},
+	{"pidfile"      , read_str        , &server_config.pidfile      , "/data/udhcpd.pid"},
 	{"siaddr"       , udhcp_str2nip   , &server_config.siaddr_nip   , "0.0.0.0"},
 	/* keywords with no defaults must be last! */
 	{"option"       , udhcp_str2optset, &server_config.options      , ""},
@@ -189,12 +189,24 @@ void FAST_FUNC read_leases(const char *file)
 		goto ret;
 
 	while (full_read(fd, &lease, sizeof(lease)) == sizeof(lease)) {
-//FIXME: what if it matches some static lease?
 		uint32_t y = ntohl(lease.lease_nip);
 		if (y >= server_config.start_ip && y <= server_config.end_ip) {
 			signed_leasetime_t expires = ntohl(lease.expires) - (signed_leasetime_t)time_passed;
+			uint32_t static_nip;
+
 			if (expires <= 0)
 				continue;
+
+			/* Check if there is a different static lease for this IP or MAC */
+			static_nip = get_static_nip_by_mac(server_config.static_leases, lease.lease_mac);
+			if (static_nip) {
+				/* NB: we do not add lease even if static_nip == lease.lease_nip.
+				 */
+				continue;
+			}
+			if (is_nip_reserved(server_config.static_leases, lease.lease_nip))
+				continue;
+
 			/* NB: add_lease takes "relative time", IOW,
 			 * lease duration, not lease deadline. */
 			if (add_lease(lease.lease_mac, lease.lease_nip,

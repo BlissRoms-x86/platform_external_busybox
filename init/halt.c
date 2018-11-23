@@ -69,16 +69,12 @@
 #include "libbb.h"
 #include "reboot.h"
 
-#ifdef __BIONIC__
-# include "android/reboot.c"
-#endif
-
 #if ENABLE_FEATURE_WTMP
 #include <sys/utsname.h>
 
 static void write_wtmp(void)
 {
-	struct utmp utmp;
+	struct utmpx utmp;
 	struct utsname uts;
 	/* "man utmp" says wtmp file should *not* be created automagically */
 	/*if (access(bb_path_wtmp_file, R_OK|W_OK) == -1) {
@@ -92,7 +88,7 @@ static void write_wtmp(void)
 	utmp.ut_line[0] = '~'; utmp.ut_line[1] = '~'; /* = strcpy(utmp.ut_line, "~~"); */
 	uname(&uts);
 	safe_strncpy(utmp.ut_host, uts.release, sizeof(utmp.ut_host));
-	updwtmp(bb_path_wtmp_file, &utmp);
+	updwtmpx(bb_path_wtmp_file, &utmp);
 }
 #else
 #define write_wtmp() ((void)0)
@@ -133,31 +129,6 @@ int halt_main(int argc UNUSED_PARAM, char **argv)
 
 	if (!(flags & 2)) /* no -n */
 		sync();
-
-#ifdef __BIONIC__
-	char *mode[4];
-	int c = 1;
-	mode[0] = strdup("reboot");
-	mode[1] = mode[2] = mode[3] = NULL;
-	switch (which) {
-	case 0:
-	case 1:
-		//-p for halt
-		mode[1] = strdup("-p");
-		c=2;
-		break;
-	case 2:
-		//reboot
-		#ifdef CYANOGEN_LIBREBOOT
-		if (argc > 1) {
-			mode[1] = strdup(argv[1]);
-			c = 2;
-		}
-		#endif
-		break;
-	}
-	return reboot_main(c, mode);
-#endif
 
 	/* Perform action. */
 	rc = 1;

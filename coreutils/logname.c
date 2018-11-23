@@ -50,3 +50,14 @@ int logname_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 
 	bb_perror_msg_and_die("getlogin");
 }
+
+int getlogin_r(char* name, size_t namesize)
+{
+	char *s = getlogin(); 
+	if (s) {
+	 	strncpy (name, s, namesize);
+		return 0;
+	} else {
+		return -1;
+	}
+}

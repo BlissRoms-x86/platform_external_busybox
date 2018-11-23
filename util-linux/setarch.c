@@ -20,7 +20,7 @@
 //usage:#define linux64_trivial_usage NOUSAGE_STR
 //usage:#define linux64_full_usage ""
 
-#include <sys/personality.h>
+#include <linux/personality.h>
 
 #include "libbb.h"
 

@@ -15,6 +15,7 @@
 //usage:     "\n	-b	Display current state of booleans"
 
 #include "libbb.h"
+#include "android/android_selinux.h"
 
 extern char *selinux_mnt;
 
@@ -22,15 +23,6 @@ extern char *selinux_mnt;
 #define OPT_BOOLEAN  (1 << 1)
 
 #define COL_FMT  "%-31s "
-
-static int internal_selinux_getenforcemode(int *rc)
-{
-	if (rc) {
-		*rc = security_getenforce();
-		return 0;
-	}
-	return -1;
-}
 
 static void display_boolean(void)
 {
@@ -70,7 +62,7 @@ static void read_config(char **pc, int npc, char **fc, int nfc)
 
 	pc[0] = fc[0] = NULL;
 
-	parser = config_open("/etc/sestatus.conf");
+	parser = config_open("/system/etc/sestatus.conf");
 	while (config_read(parser, &buf, 1, 1, "# \t", PARSE_NORMAL)) {
 		if (strcmp(buf, "[process]") == 0) {
 			section = 1;
@@ -190,7 +182,7 @@ int sestatus_main(int argc UNUSED_PARAM, char **argv)
 	       rc == 0 ? "permissive" : "enforcing");
 
 	/* Mode from config file: line */
-	if (internal_selinux_getenforcemode(&rc) != 0)
+	if (selinux_getenforcemode(&rc) != 0)
 		goto error;
 	printf(COL_FMT "%s\n", "Mode from config file:",
 	       rc < 0 ? "disabled" : (rc == 0 ? "permissive" : "enforcing"));

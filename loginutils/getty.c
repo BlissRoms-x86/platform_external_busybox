@@ -54,19 +54,14 @@ static FILE *dbf;
  * and for line editing at the same time.
  */
 #undef  _PATH_LOGIN
-#ifdef __BIONIC__
-#define cfsetspeed(t,s) cfsetispeed(t,s)
-#define _PATH_LOGIN "/system/xbin/login"
-#else
-#define _PATH_LOGIN "/bin/login"
-#endif
+#define _PATH_LOGIN "/system/bin/login"
 
 /* Displayed before the login prompt.
  * If ISSUE is not defined, getty will never display the contents of the
  * /etc/issue file. You will not want to spit out large "issue" files at the
  * wrong baud rate.
  */
-#define ISSUE "/etc/issue"
+#define ISSUE "/system/etc/issue"
 
 /* Macro to build Ctrl-LETTER. Assumes ASCII dialect */
 #define CTL(x)          ((x) ^ 0100)
@@ -99,7 +94,7 @@ struct globals {
 //usage:#define getty_trivial_usage
 //usage:       "[OPTIONS] BAUD_RATE[,BAUD_RATE]... TTY [TERMTYPE]"
 //usage:#define getty_full_usage "\n\n"
-//usage:       "Open TTY, prompt for login name, then invoke /system/xbin/login\n"
+//usage:       "Open TTY, prompt for login name, then invoke /bin/login\n"
 //usage:     "\n	-h		Enable hardware RTS/CTS flow control"
 //usage:     "\n	-L		Set CLOCAL (ignore Carrier Detect state)"
 //usage:     "\n	-m		Get baud rate from modem's CONNECT status message"
@@ -107,7 +102,7 @@ struct globals {
 //usage:     "\n	-w		Wait for CR or LF before sending /etc/issue"
 //usage:     "\n	-i		Don't display /etc/issue"
 //usage:     "\n	-f ISSUE_FILE	Display ISSUE_FILE instead of /etc/issue"
-//usage:     "\n	-l LOGIN	Invoke LOGIN instead of /system/xbin/login"
+//usage:     "\n	-l LOGIN	Invoke LOGIN instead of /bin/login"
 //usage:     "\n	-t SEC		Terminate after SEC if no login name is read"
 //usage:     "\n	-I INITSTR	Send INITSTR before anything else"
 //usage:     "\n	-H HOST		Log HOST into the utmp file as the hostname"
@@ -339,18 +334,19 @@ static void finalize_tty_attrs(void)
 	 *         observed to improve backspacing through Unicode chars
 	 */
 
-	/* line buffered input (NL or EOL or EOF chars end a line);
-	 * recognize INT/QUIT/SUSP chars;
-	 * echo input chars;
-	 * echo BS-SP-BS on erase character;
-	 * echo kill char specially, not as ^c (ECHOKE controls how exactly);
-	 * erase all input via BS-SP-BS on kill char (else go to next line)
+	/* ICANON  line buffered input (NL or EOL or EOF chars end a line);
+	 * ISIG    recognize INT/QUIT/SUSP chars;
+	 * ECHO    echo input chars;
+	 * ECHOE   echo BS-SP-BS on erase character;
+	 * ECHOK   echo kill char specially, not as ^c (ECHOKE controls how exactly);
+	 * ECHOKE  erase all input via BS-SP-BS on kill char (else go to next line)
+	 * ECHOCTL Echo ctrl chars as ^c (else echo verbatim:
+	 *         e.g. up arrow emits "ESC-something" and thus moves cursor up!)
 	 */
-	G.tty_attrs.c_lflag |= ICANON | ISIG | ECHO | ECHOE | ECHOK | ECHOKE;
+	G.tty_attrs.c_lflag |= ICANON | ISIG | ECHO | ECHOE | ECHOK | ECHOKE | ECHOCTL;
 	/* Other bits in c_lflag:
 	 * XCASE   Map uppercase to \lowercase [tried, doesn't work]
 	 * ECHONL  Echo NL even if ECHO is not set
-	 * ECHOCTL Echo ctrl chars as ^c (else don't echo) - maybe set this?
 	 * ECHOPRT On erase, echo erased chars
 	 *         [qwe<BS><BS><BS> input looks like "qwe\ewq/" on screen]
 	 * NOFLSH  Don't flush input buffer after interrupt or quit chars
@@ -504,7 +500,7 @@ static char *get_logname(void)
 			default:
 				if ((unsigned char)c < ' ') {
 					/* ignore garbage characters */
-				} else if ((int)(bp - G.line_buf) < (int)sizeof(G.line_buf) - 1) {
+				} else if ((int)(bp - G.line_buf) < sizeof(G.line_buf) - 1) {
 					/* echo and store the character */
 					full_write(STDOUT_FILENO, &c, 1);
 					*bp++ = c;
@@ -522,6 +518,11 @@ static void alarm_handler(int sig UNUSED_PARAM)
 {
 	finalize_tty_attrs();
 	_exit(EXIT_SUCCESS);
+}
+
+static void sleep10(void)
+{
+	sleep(10);
 }
 
 int getty_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
@@ -561,6 +562,16 @@ int getty_main(int argc UNUSED_PARAM, char **argv)
 			//	pid, getppid(),
 			//	getsid(0), getpgid(0));
 			bb_perror_msg_and_die("setsid");
+			/*
+			 * When we can end up here?
+			 * Example: setsid() fails when run alone in interactive shell:
+			 *  # getty 115200 /dev/tty2
+			 * because shell's child (getty) is put in a new process group.
+			 * But doesn't fail if shell is not interactive
+			 * (and therefore doesn't create process groups for pipes),
+			 * or if getty is not the first process in the process group:
+			 *  # true | getty 115200 /dev/tty2
+			 */
 		}
 		/* Looks like we are already a session leader.
 		 * In this case (setsid failed) we may still have ctty,
@@ -593,7 +604,7 @@ int getty_main(int argc UNUSED_PARAM, char **argv)
 		close(n--);
 
 	/* Logging. We want special flavor of error_msg_and_die */
-	die_sleep = 10;
+	die_func = sleep10;
 	msg_eol = "\r\n";
 	/* most likely will internally use fd #3 in CLOEXEC mode: */
 	openlog(applet_name, LOG_PID, LOG_AUTH);

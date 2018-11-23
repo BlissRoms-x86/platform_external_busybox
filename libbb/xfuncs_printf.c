@@ -37,7 +37,7 @@ void* FAST_FUNC malloc_or_warn(size_t size)
 {
 	void *ptr = malloc(size);
 	if (ptr == NULL && size != 0)
-		bb_error_msg("%s", bb_msg_memory_exhausted);
+		bb_error_msg(bb_msg_memory_exhausted);
 	return ptr;
 }
 
@@ -46,7 +46,7 @@ void* FAST_FUNC xmalloc(size_t size)
 {
 	void *ptr = malloc(size);
 	if (ptr == NULL && size != 0)
-		bb_error_msg_and_die("%s", bb_msg_memory_exhausted);
+		bb_error_msg_and_die(bb_msg_memory_exhausted);
 	return ptr;
 }
 
@@ -57,7 +57,7 @@ void* FAST_FUNC xrealloc(void *ptr, size_t size)
 {
 	ptr = realloc(ptr, size);
 	if (ptr == NULL && size != 0)
-		bb_error_msg_and_die("%s", bb_msg_memory_exhausted);
+		bb_error_msg_and_die(bb_msg_memory_exhausted);
 	return ptr;
 }
 #endif /* DMALLOC */
@@ -81,7 +81,7 @@ char* FAST_FUNC xstrdup(const char *s)
 	t = strdup(s);
 
 	if (t == NULL)
-		bb_error_msg_and_die("%s", bb_msg_memory_exhausted);
+		bb_error_msg_and_die(bb_msg_memory_exhausted);
 
 	return t;
 }
@@ -110,6 +110,11 @@ char* FAST_FUNC xstrndup(const char *s, int n)
 	t[n] = '\0';
 
 	return memcpy(t, s, n);
+}
+
+void* FAST_FUNC xmemdup(const void *s, int n)
+{
+	return memcpy(xmalloc(n), s, n);
 }
 
 // Die if we can't open a file and return a FILE* to it.
@@ -246,12 +251,12 @@ void FAST_FUNC xclose(int fd)
 }
 
 // Die with an error message if we can't lseek to the right spot.
-off64_t FAST_FUNC xlseek(int fd, off64_t offset, int whence)
+off_t FAST_FUNC xlseek(int fd, off_t offset, int whence)
 {
-	off64_t off = lseek64(fd, offset, whence);
+	off_t off = lseek(fd, offset, whence);
 	if (off == (off_t)-1) {
 		if (whence == SEEK_SET)
-			bb_perror_msg_and_die("lseek(%llu)", offset);
+			bb_perror_msg_and_die("lseek(%"OFF_FMT"u)", offset);
 		bb_perror_msg_and_die("lseek");
 	}
 	return off;
@@ -316,19 +321,14 @@ char* FAST_FUNC xasprintf(const char *format, ...)
 	va_end(p);
 
 	if (r < 0)
-		bb_error_msg_and_die("%s", bb_msg_memory_exhausted);
+		bb_error_msg_and_die(bb_msg_memory_exhausted);
 	return string_ptr;
 }
 
 void FAST_FUNC xsetenv(const char *key, const char *value)
 {
-#ifdef __BIONIC__
-	/* on login, can be NULL, and should not be for bionic */
-	if (environ == NULL)
-		bb_error_msg_and_die("environment is not initialized");
-#endif
 	if (setenv(key, value, 1))
-		bb_error_msg_and_die("%s", bb_msg_memory_exhausted);
+		bb_error_msg_and_die(bb_msg_memory_exhausted);
 }
 
 /* Handles "VAR=VAL" strings, even those which are part of environ
@@ -649,7 +649,7 @@ pid_t FAST_FUNC xfork(void)
 	pid_t pid;
 	pid = fork();
 	if (pid < 0) /* wtf? */
-		bb_perror_msg_and_die("vfork");
+		bb_perror_msg_and_die("vfork"+1);
 	return pid;
 }
 #endif

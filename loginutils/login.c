@@ -17,10 +17,8 @@
 
 #if ENABLE_SELINUX
 # include <selinux/selinux.h>  /* for is_selinux_enabled()  */
-#ifndef __BIONIC__
-# include <selinux/get_context_list.h> /* for get_default_context() */
-# include <selinux/flask.h> /* for security class definitions  */
-#endif
+//# include <selinux/get_context_list.h> /* for get_default_context() */
+//# include <selinux/flask.h> /* for security class definitions  */
 #endif
 
 #if ENABLE_PAM
@@ -58,7 +56,7 @@ static void die_if_nologin(void)
 	int c;
 	int empty = 1;
 
-	fp = fopen_for_read("/etc/nologin");
+	fp = fopen_for_read("/system/etc/nologin");
 	if (!fp) /* assuming it does not exist */
 		return;
 
@@ -84,8 +82,8 @@ static void die_if_nologin(void)
 #if ENABLE_FEATURE_SECURETTY && !ENABLE_PAM
 static int check_securetty(const char *short_tty)
 {
-	char *buf = (char*)"/etc/securetty"; /* any non-NULL is ok */
-	parser_t *parser = config_open2("/etc/securetty", fopen_for_read);
+	char *buf = (char*)"/system/etc/securetty"; /* any non-NULL is ok */
+	parser_t *parser = config_open2("/system/etc/securetty", fopen_for_read);
 	while (config_read(parser, &buf, 1, 1, "# \t", PARSE_NORMAL)) {
 		if (strcmp(buf, short_tty) == 0)
 			break;
@@ -101,6 +99,7 @@ static ALWAYS_INLINE int check_securetty(const char *short_tty UNUSED_PARAM) { r
 #endif
 
 #if ENABLE_SELINUX
+#define SECCLASS_CHR_FILE                                10
 static void initselinux(char *username, char *full_tty,
 						security_context_t *user_sid)
 {
@@ -120,8 +119,7 @@ static void initselinux(char *username, char *full_tty,
 		bb_perror_msg_and_die("security_change_sid(%s) failed", full_tty);
 	}
 	if (setfilecon(full_tty, new_tty_sid) != 0) {
-		if (strcmp(old_tty_sid, new_tty_sid))
-			bb_perror_msg_and_die("chsid(%s, %s) failed", full_tty, new_tty_sid);
+		bb_perror_msg_and_die("chsid(%s, %s) failed", full_tty, new_tty_sid);
 	}
 }
 #endif
@@ -400,7 +398,7 @@ int login_main(int argc UNUSED_PARAM, char **argv)
 					pam_strerror(pamh, pamret), pamret);
 		safe_strncpy(username, "UNKNOWN", sizeof(username));
 #else /* not PAM */
-		pw = safegetpwnam(username);
+		pw = getpwnam(username);
 		if (!pw) {
 			strcpy(username, "UNKNOWN");
 			goto fake_it;
@@ -457,7 +455,7 @@ int login_main(int argc UNUSED_PARAM, char **argv)
 		else {
 			if (safe_waitpid(child_pid, NULL, 0) == -1)
 				bb_perror_msg("waitpid");
-			update_utmp(child_pid, DEAD_PROCESS, NULL, NULL, NULL);
+			update_utmp_DEAD_PROCESS(child_pid);
 		}
 		IF_PAM(login_pam_end(pamh);)
 		return 0;
@@ -492,7 +490,8 @@ int login_main(int argc UNUSED_PARAM, char **argv)
 	}
 #endif
 
-	motd();
+	if (access(".hushlogin", F_OK) != 0)
+		motd();
 
 	if (pw->pw_uid == 0)
 		syslog(LOG_INFO, "root login%s", fromhost);

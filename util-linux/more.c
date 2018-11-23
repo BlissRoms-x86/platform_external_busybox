@@ -58,14 +58,15 @@ static void gotsig(int sig UNUSED_PARAM)
 int more_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int more_main(int argc UNUSED_PARAM, char **argv)
 {
-	int c = EOF; /* for compiler */
+	int c = c; /* for compiler */
+	int lines;
 	int input = 0;
 	int spaces = 0;
 	int please_display_more_prompt;
 	struct stat st;
 	FILE *file;
 	FILE *cin;
-	unsigned len, lines;
+	int len;
 	unsigned terminal_width;
 	unsigned terminal_height;
 
@@ -120,8 +121,11 @@ int more_main(int argc UNUSED_PARAM, char **argv)
 			if (input != 'r' && please_display_more_prompt) {
 				len = printf("--More-- ");
 				if (st.st_size != 0) {
-					len += printf("(%u%% of %"FILESIZE_FMT"u bytes)",
-						(int) (ftello(file)*100 / st.st_size),
+					uoff_t d = (uoff_t)st.st_size / 100;
+					if (d == 0)
+						d = 1;
+					len += printf("(%u%% of %"OFF_FMT"u bytes)",
+						(int) ((uoff_t)ftello(file) / d),
 						st.st_size);
 				}
 				fflush_all();

@@ -48,6 +48,7 @@
 #if ENABLE_FEATURE_SETFILES_CHECK_OPTION
 #include <sepol/sepol.h>
 #endif
+#include "android/android_selinux.h"
 
 #define MAX_EXCLUDES 50
 
@@ -251,7 +252,6 @@ static int match(const char *name, struct stat *sb, char **con)
 			name = path;
 			if (excludeCtr > 0 && exclude(name))
 				goto err;
-
 		} else {
 			char *p;
 			p = realpath(name, path);
@@ -650,16 +650,6 @@ int setfiles_main(int argc UNUSED_PARAM, char **argv)
 			exit(EXIT_FAILURE);
 		argv++;
 	}
-
-#ifdef __BIONIC__
-	else {
-		const char *file_contexts = selinux_file_contexts_path();
-		/* Load the default file contexts configuration and check it. */
-		if (matchpathcon_init(file_contexts) < 0) {
-			bb_perror_msg_and_die("%s not found!", file_contexts);
-		}
-	}
-#endif
 
 	if (input_filename) {
 		ssize_t len;

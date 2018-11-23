@@ -22,7 +22,7 @@
 //usage:     "\n	-l	Lazy umount (detach filesystem)"
 //usage:     "\n	-f	Force umount (i.e., unreachable NFS server)"
 //usage:	IF_FEATURE_MOUNT_LOOP(
-//usage:     "\n	-d	Free loop device even if it has been used"
+//usage:     "\n	-D	Don't free loop device even if it has been used"
 //usage:	)
 //usage:
 //usage:#define umount_example_usage
@@ -55,8 +55,8 @@ static struct mntent *getmntent_r(FILE* stream, struct mntent* result,
 #define OPTION_STRING           "fldDnra" "vt:i"
 #define OPT_FORCE               (1 << 0) // Same as MNT_FORCE
 #define OPT_LAZY                (1 << 1) // Same as MNT_DETACH
-#define OPT_FREELOOP            (1 << 2)
-//#define OPT_DONT_FREE_LOOP    (1 << 3) // Default behavior
+//#define OPT_FREE_LOOP           (1 << 2) // -d is assumed always present
+#define OPT_DONT_FREE_LOOP      (1 << 3)
 #define OPT_NO_MTAB             (1 << 4)
 #define OPT_REMOUNT             (1 << 5)
 #define OPT_ALL                 (ENABLE_FEATURE_UMOUNT_ALL ? (1 << 6) : 0)
@@ -81,8 +81,13 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
 	argv += optind;
 
 	// MNT_FORCE and MNT_DETACH (from linux/fs.h) must match
-	// OPT_FORCE and OPT_LAZY, otherwise this trick won't work:
-	doForce = MAX((opt & OPT_FORCE), (opt & OPT_LAZY));
+	// OPT_FORCE and OPT_LAZY.
+	{
+		typedef char bug[
+			(OPT_FORCE != MNT_FORCE || OPT_LAZY != MNT_DETACH) ? -1 : 1
+		];
+	}
+	doForce = opt & (OPT_FORCE|OPT_LAZY);
 
 	/* Get a list of mount points from mtab.  We read them all in now mostly
 	 * for umount -a (so we don't have to worry about the list changing while
@@ -147,11 +152,18 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
 		// umount the directory even if we were given the block device.
 		if (m) zapit = m->dir;
 
+// umount from util-linux 2.22.2 does not do this:
+// umount -f uses umount2(MNT_FORCE) immediately,
+// not trying umount() first.
+// (Strangely, umount -fl ignores -f: it is equivalent to umount -l.
+// We do pass both flags in this case)
+#if 0
 		// Let's ask the thing nicely to unmount.
 		curstat = umount(zapit);
 
-		// Force the unmount, if necessary.
+		// Unmount with force and/or lazy flags, if necessary.
 		if (curstat && doForce)
+#endif
 			curstat = umount2(zapit, doForce);
 
 		// If still can't umount, maybe remount read-only?
@@ -168,12 +180,12 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
 				bb_error_msg(msg, m->device);
 			} else {
 				status = EXIT_FAILURE;
-				bb_perror_msg("can't %sumount %s", (doForce ? "forcibly " : ""), zapit);
+				bb_perror_msg("can't unmount %s", zapit);
 			}
 		} else {
 			// De-allocate the loop device.  This ioctl should be ignored on
 			// any non-loop block devices.
-			if (ENABLE_FEATURE_MOUNT_LOOP && (opt & OPT_FREELOOP) && m)
+			if (ENABLE_FEATURE_MOUNT_LOOP && !(opt & OPT_DONT_FREE_LOOP) && m)
 				del_loop(m->device);
 			if (ENABLE_FEATURE_MTAB_SUPPORT && !(opt & OPT_NO_MTAB) && m)
 				erase_mtab(m->dir);

@@ -17,8 +17,103 @@
 // mount_it_now() does the actual mount.
 //
 
+//config:config MOUNT
+//config:	bool "mount"
+//config:	default y
+//config:	select PLATFORM_LINUX
+//config:	help
+//config:	  All files and filesystems in Unix are arranged into one big directory
+//config:	  tree. The 'mount' utility is used to graft a filesystem onto a
+//config:	  particular part of the tree. A filesystem can either live on a block
+//config:	  device, or it can be accessible over the network, as is the case with
+//config:	  NFS filesystems. Most people using BusyBox will also want to enable
+//config:	  the 'mount' utility.
+//config:
+//config:config FEATURE_MOUNT_FAKE
+//config:	bool "Support option -f"
+//config:	default y
+//config:	depends on MOUNT
+//config:	help
+//config:	  Enable support for faking a file system mount.
+//config:
+//config:config FEATURE_MOUNT_VERBOSE
+//config:	bool "Support option -v"
+//config:	default y
+//config:	depends on MOUNT
+//config:	help
+//config:	  Enable multi-level -v[vv...] verbose messages. Useful if you
+//config:	  debug mount problems and want to see what is exactly passed
+//config:	  to the kernel.
+//config:
+//config:config FEATURE_MOUNT_HELPERS
+//config:	bool "Support mount helpers"
+//config:	default n
+//config:	depends on MOUNT
+//config:	help
+//config:	  Enable mounting of virtual file systems via external helpers.
+//config:	  E.g. "mount obexfs#-b00.11.22.33.44.55 /mnt" will in effect call
+//config:	  "obexfs -b00.11.22.33.44.55 /mnt"
+//config:	  Also "mount -t sometype [-o opts] fs /mnt" will try
+//config:	  "sometype [-o opts] fs /mnt" if simple mount syscall fails.
+//config:	  The idea is to use such virtual filesystems in /etc/fstab.
+//config:
+//config:config FEATURE_MOUNT_LABEL
+//config:	bool "Support specifying devices by label or UUID"
+//config:	default y
+//config:	depends on MOUNT
+//config:	select VOLUMEID
+//config:	help
+//config:	  This allows for specifying a device by label or uuid, rather than by
+//config:	  name. This feature utilizes the same functionality as blkid/findfs.
+//config:	  This also enables label or uuid support for swapon.
+//config:
+//config:config FEATURE_MOUNT_NFS
+//config:	bool "Support mounting NFS file systems on Linux < 2.6.23"
+//config:	default n
+//config:	depends on MOUNT
+//config:	select FEATURE_HAVE_RPC
+//config:	select FEATURE_SYSLOG
+//config:	help
+//config:	  Enable mounting of NFS file systems on Linux kernels prior
+//config:	  to version 2.6.23. Note that in this case mounting of NFS
+//config:	  over IPv6 will not be possible.
+//config:
+//config:	  Note that this option links in RPC support from libc,
+//config:	  which is rather large (~10 kbytes on uclibc).
+//config:
+//config:config FEATURE_MOUNT_CIFS
+//config:	bool "Support mounting CIFS/SMB file systems"
+//config:	default y
+//config:	depends on MOUNT
+//config:	help
+//config:	  Enable support for samba mounts.
+//config:
+//config:config FEATURE_MOUNT_FLAGS
+//config:	depends on MOUNT
+//config:	bool "Support lots of -o flags in mount"
+//config:	default y
+//config:	help
+//config:	  Without this, mount only supports ro/rw/remount. With this, it
+//config:	  supports nosuid, suid, dev, nodev, exec, noexec, sync, async, atime,
+//config:	  noatime, diratime, nodiratime, loud, bind, move, shared, slave,
+//config:	  private, unbindable, rshared, rslave, rprivate, and runbindable.
+//config:
+//config:config FEATURE_MOUNT_FSTAB
+//config:	depends on MOUNT
+//config:	bool "Support /etc/fstab and -a"
+//config:	default y
+//config:	help
+//config:	  Support mount all and looking for files in /etc/fstab.
+//config:
+//config:config FEATURE_MOUNT_OTHERTAB
+//config:	depends on FEATURE_MOUNT_FSTAB
+//config:	bool "Support -T <alt_fstab>"
+//config:	default y
+//config:	help
+//config:	  Support mount -T (specifying an alternate fstab)
+
 //usage:#define mount_trivial_usage
-//usage:       "[OPTIONS] [-o OPTS] DEVICE NODE"
+//usage:       "[OPTIONS] [-o OPT] DEVICE NODE"
 //usage:#define mount_full_usage "\n\n"
 //usage:       "Mount a filesystem. Filesystem autodetection requires /proc.\n"
 //usage:     "\n	-a		Mount all filesystems in fstab"
@@ -41,8 +136,11 @@
 //usage:	)
 ////usage:   "\n	-s		Sloppy (ignored)"
 //usage:     "\n	-r		Read-only mount"
-//usage:     "\n	-w		Read-write mount (default)"
+////usage:     "\n	-w		Read-write mount (default)"
 //usage:     "\n	-t FSTYPE[,...]	Filesystem type(s)"
+//usage:	IF_FEATURE_MOUNT_OTHERTAB(
+//usage:     "\n	-T FILE		Read FILE instead of /etc/fstab"
+//usage:	)
 //usage:     "\n	-O OPT		Mount only filesystems with option OPT (-a only)"
 //usage:     "\n-o OPT:"
 //usage:	IF_FEATURE_MOUNT_LOOP(
@@ -64,7 +162,7 @@
 //usage:     "\n	move		Relocate an existing mount point"
 //usage:	)
 //usage:     "\n	remount		Remount a mounted filesystem, changing flags"
-//usage:     "\n	ro/rw		Same as -r/-w"
+//usage:     "\n	ro		Same as -r"
 //usage:     "\n"
 //usage:     "\nThere are filesystem-specific -o flags."
 //usage:
@@ -167,7 +265,7 @@ enum {
 };
 
 
-#define OPTION_STR "o:t:rwanfvsiO:"
+#define OPTION_STR "o:t:rwanfvsiO:" IF_FEATURE_MOUNT_OTHERTAB("T:")
 enum {
 	OPT_o = (1 << 0),
 	OPT_t = (1 << 1),
@@ -180,6 +278,7 @@ enum {
 	OPT_s = (1 << 8),
 	OPT_i = (1 << 9),
 	OPT_O = (1 << 10),
+	OPT_T = (1 << 11),
 };
 
 #if ENABLE_FEATURE_MTAB_SUPPORT
@@ -341,7 +440,6 @@ struct globals {
 	unsigned verbose;
 #endif
 	llist_t *fslist;
-	int user_fstype;
 	char getmntent_buf[1];
 } FIX_ALIASING;
 enum { GETMNTENT_BUFSIZE = COMMON_BUFSIZE - offsetof(struct globals, getmntent_buf) };
@@ -353,7 +451,6 @@ enum { GETMNTENT_BUFSIZE = COMMON_BUFSIZE - offsetof(struct globals, getmntent_b
 #define verbose           0
 #endif
 #define fslist            (G.fslist           )
-#define user_fstype       (G.user_fstype      )
 #define getmntent_buf     (G.getmntent_buf    )
 #define INIT_G() do { } while (0)
 
@@ -531,7 +628,7 @@ static unsigned long parse_mount_options(char *options, char **unrecognized)
 static llist_t *get_block_backed_filesystems(void)
 {
 	static const char filesystems[2][sizeof("/proc/filesystems")] = {
-		"/etc/filesystems",
+		"/system/etc/filesystems",
 		"/proc/filesystems",
 	};
 	char *fs, *buf;
@@ -544,7 +641,7 @@ static llist_t *get_block_backed_filesystems(void)
 		if (!f) continue;
 
 		while ((buf = xmalloc_fgetline(f)) != NULL) {
-			if (strncmp(buf, "nodev", 5) == 0 && isspace(buf[5]))
+			if (is_prefixed_with(buf, "nodev") && isspace(buf[5]))
 				goto next;
 			fs = skip_whitespace(buf);
 			if (*fs == '#' || *fs == '*' || !*fs)
@@ -569,6 +666,23 @@ static void delete_block_backed_filesystems(void)
 void delete_block_backed_filesystems(void);
 #endif
 
+// Mark the given block device as read-write, using the BLKROSET ioctl.
+// https://github.com/CyanogenMod/android_system_core/blob/cm-12.1/toolbox/mount.c
+static void fs_set_blk_rw(const char *blockdev)
+{
+    int fd;
+    int OFF = 0;
+
+    fd = open(blockdev, O_RDONLY);
+    if (fd < 0) {
+        // should never happen
+        return;
+    }
+
+    ioctl(fd, BLKROSET, &OFF);
+    close(fd);
+}
+
 // Perform actual mount of specific filesystem at specific location.
 // NB: mp->xxx fields may be trashed on exit
 static int mount_it_now(struct mntent *mp, unsigned long vfsflags, char *filteropts)
@@ -582,6 +696,9 @@ static int mount_it_now(struct mntent *mp, unsigned long vfsflags, char *filtero
 				vfsflags, filteropts);
 		goto mtab;
 	}
+
+	if ((vfsflags & MS_RDONLY) == 0)
+		fs_set_blk_rw(mp->mnt_fsname);
 
 	// Mount, with fallback to read-only if necessary.
 	for (;;) {
@@ -625,7 +742,7 @@ static int mount_it_now(struct mntent *mp, unsigned long vfsflags, char *filtero
 	// Abort entirely if permission denied.
 
 	if (rc && errno == EPERM)
-		bb_error_msg_and_die("%s", bb_msg_perm_denied_are_you_root);
+		bb_error_msg_and_die(bb_msg_perm_denied_are_you_root);
 
 	// If the mount was successful, and we're maintaining an old-style
 	// mtab file by hand, add the new entry to it now.
@@ -921,7 +1038,7 @@ static char *nfs_strerror(int status)
 {
 	int i;
 
-	for (i = 0; i < (int) ARRAY_SIZE(nfs_err_stat); i++) {
+	for (i = 0; i < ARRAY_SIZE(nfs_err_stat); i++) {
 		if (nfs_err_stat[i] == status)
 			return strerror(nfs_err_errnum[i]);
 	}
@@ -1267,9 +1384,9 @@ static NOINLINE int nfsmount(struct mntent *mp, unsigned long vfsflags, char *fi
 						strcspn(opteq, " \t\n\r,"));
 				continue;
 			case 18: // "proto"
-				if (!strncmp(opteq, "tcp", 3))
+				if (is_prefixed_with(opteq, "tcp"))
 					tcp = 1;
-				else if (!strncmp(opteq, "udp", 3))
+				else if (is_prefixed_with(opteq, "udp"))
 					tcp = 0;
 				else
 					bb_error_msg("warning: unrecognized proto= option");
@@ -1362,7 +1479,7 @@ static NOINLINE int nfsmount(struct mntent *mp, unsigned long vfsflags, char *fi
 				"rdirplus\0"
 				"acl\0";
 			int val = 1;
-			if (!strncmp(opt, "no", 2)) {
+			if (is_prefixed_with(opt, "no")) {
 				val = 0;
 				opt += 2;
 			}
@@ -1778,7 +1895,6 @@ static int singlemount(struct mntent *mp, int ignore_busy)
 	int rc = -1;
 	unsigned long vfsflags;
 	char *loopFile = NULL, *filteropts = NULL;
-	char *detected_fstype = NULL;
 	llist_t *fl = NULL;
 	struct stat st;
 
@@ -1786,19 +1902,9 @@ static int singlemount(struct mntent *mp, int ignore_busy)
 
 	vfsflags = parse_mount_options(mp->mnt_opts, &filteropts);
 
-	if (user_fstype) {
-		// Treat fstype "auto" as unspecified
-		if (mp->mnt_type && !strcmp(mp->mnt_type, "auto"))
-			mp->mnt_type = NULL;
-	} else if (mp->mnt_type) {
-		// If user didn't specify an fstype and blkid disagrees or the
-		// fstype is "auto", trust blkid's determination of the fstype.
-		detected_fstype = get_fstype_from_devname(mp->mnt_fsname);
-
-		if (!strcmp(mp->mnt_type, "auto") ||
-		    (detected_fstype && strcmp(detected_fstype, mp->mnt_type)))
-			mp->mnt_type = detected_fstype;
-	}
+	// Treat fstype "auto" as unspecified
+	if (mp->mnt_type && strcmp(mp->mnt_type, "auto") == 0)
+		mp->mnt_type = NULL;
 
 	// Might this be a virtual filesystem?
 	if (ENABLE_FEATURE_MOUNT_HELPERS && strchr(mp->mnt_fsname, '#')) {
@@ -1893,7 +1999,7 @@ static int singlemount(struct mntent *mp, int ignore_busy)
 	}
 
 	// Might this be an NFS filesystem?
-	if ((!mp->mnt_type || strncmp(mp->mnt_type, "nfs", 3) == 0)
+	if ((!mp->mnt_type || is_prefixed_with(mp->mnt_type, "nfs"))
 	 && strchr(mp->mnt_fsname, ':') != NULL
 	) {
 		if (!mp->mnt_type)
@@ -1915,7 +2021,7 @@ static int singlemount(struct mntent *mp, int ignore_busy)
 			mp->mnt_fsname = NULL; // will receive malloced loop dev name
 			if (set_loop(&mp->mnt_fsname, loopFile, 0, /*ro:*/ (vfsflags & MS_RDONLY)) < 0) {
 				if (errno == EPERM || errno == EACCES)
-					bb_error_msg("%s", bb_msg_perm_denied_are_you_root);
+					bb_error_msg(bb_msg_perm_denied_are_you_root);
 				else
 					bb_perror_msg("can't setup loop device");
 				return errno;
@@ -2047,7 +2153,7 @@ int mount_main(int argc UNUSED_PARAM, char **argv)
 	char *O_optmatch = NULL;
 	char *storage_path;
 	llist_t *lst_o = NULL;
-	const char *fstabname;
+	const char *fstabname = "/system/etc/fstab";
 	FILE *fstab;
 	int i, j;
 	int rc = EXIT_SUCCESS;
@@ -2074,9 +2180,8 @@ int mount_main(int argc UNUSED_PARAM, char **argv)
 	// Max 2 params; -o is a list, -v is a counter
 	opt_complementary = "?2o::" IF_FEATURE_MOUNT_VERBOSE("vv");
 	opt = getopt32(argv, OPTION_STR, &lst_o, &fstype, &O_optmatch
+			IF_FEATURE_MOUNT_OTHERTAB(, &fstabname)
 			IF_FEATURE_MOUNT_VERBOSE(, &verbose));
-
-	if (opt & OPT_t) user_fstype = 1;
 	while (lst_o) append_mount_options(&cmdopts, llist_pop(&lst_o)); // -o
 	if (opt & OPT_r) append_mount_options(&cmdopts, "ro"); // -r
 	if (opt & OPT_w) append_mount_options(&cmdopts, "rw"); // -w
@@ -2113,7 +2218,7 @@ int mount_main(int argc UNUSED_PARAM, char **argv)
 		// argument when we get it.
 		if (argv[1]) {
 			if (nonroot)
-				bb_error_msg_and_die("%s", bb_msg_you_must_be_root);
+				bb_error_msg_and_die(bb_msg_you_must_be_root);
 			mtpair->mnt_fsname = argv[0];
 			mtpair->mnt_dir = argv[1];
 			mtpair->mnt_type = fstype;
@@ -2130,7 +2235,7 @@ int mount_main(int argc UNUSED_PARAM, char **argv)
 
 	cmdopt_flags = parse_mount_options(cmdopts, NULL);
 	if (nonroot && (cmdopt_flags & ~MS_SILENT)) // Non-root users cannot specify flags
-		bb_error_msg_and_die("%s", bb_msg_you_must_be_root);
+		bb_error_msg_and_die(bb_msg_you_must_be_root);
 
 	// If we have a shared subtree flag, don't worry about fstab or mtab.
 	if (ENABLE_FEATURE_MOUNT_FLAGS
@@ -2143,8 +2248,10 @@ int mount_main(int argc UNUSED_PARAM, char **argv)
 		return rc;
 	}
 
+	// A malicious user could overmount /usr without this.
+	if (ENABLE_FEATURE_MOUNT_OTHERTAB && nonroot)
+		fstabname = "/system/etc/fstab";
 	// Open either fstab or mtab
-	fstabname = "/etc/fstab";
 	if (cmdopt_flags & MS_REMOUNT) {
 		// WARNING. I am not sure this matches util-linux's
 		// behavior. It's possible util-linux does not
@@ -2193,7 +2300,7 @@ int mount_main(int argc UNUSED_PARAM, char **argv)
 			// No, mount -a won't mount anything,
 			// even user mounts, for mere humans
 			if (nonroot)
-				bb_error_msg_and_die("%s", bb_msg_you_must_be_root);
+				bb_error_msg_and_die(bb_msg_you_must_be_root);
 
 			// Does type match? (NULL matches always)
 			if (!match_fstype(mtcur, fstype))
@@ -2273,7 +2380,7 @@ int mount_main(int argc UNUSED_PARAM, char **argv)
 			// fstab must have "users" or "user"
 			l = parse_mount_options(mtcur->mnt_opts, NULL);
 			if (!(l & MOUNT_USERS))
-				bb_error_msg_and_die("%s", bb_msg_you_must_be_root);
+				bb_error_msg_and_die(bb_msg_you_must_be_root);
 		}
 
 		//util-linux-2.12 does not do this check.
@@ -2290,8 +2397,6 @@ int mount_main(int argc UNUSED_PARAM, char **argv)
 			mtcur->mnt_opts = xstrdup(mtcur->mnt_opts);
 			append_mount_options(&(mtcur->mnt_opts), cmdopts);
 			resolve_mount_spec(&mtpair->mnt_fsname);
-			if (user_fstype)
-				mtcur->mnt_type = fstype;
 			rc = singlemount(mtcur, /*ignore_busy:*/ 0);
 			if (ENABLE_FEATURE_CLEAN_UP)
 				free(mtcur->mnt_opts);

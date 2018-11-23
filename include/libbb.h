@@ -12,20 +12,7 @@
 
 #include "platform.h"
 
-#ifdef __BIONIC__
-/* work around "extern inline" (under std=gnu99) ctype definitions we don't use anyway */
-# ifdef NDEBUG
-#  define NDEBUG_TMP NDEBUG
-# endif
-# undef NDEBUG
-# include <ctype.h>
-# ifdef NDEBUG_TMP
-#  define NDEBUG NDEBUG_TMP
-#  undef NDEBUG_TMP
-# endif
-#else
 #include <ctype.h>
-#endif
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -74,6 +61,10 @@
 #  include <shadow.h>
 # endif
 #endif
+#if defined(ANDROID) || defined(__ANDROID__)
+# define endpwent() ((void)0)
+# define endgrent() ((void)0)
+#endif
 #ifdef HAVE_MNTENT_H
 # include <mntent.h>
 #endif
@@ -89,16 +80,36 @@
 #if ENABLE_SELINUX
 # include <selinux/selinux.h>
 # include <selinux/context.h>
-#ifdef __BIONIC__
-# include "android/selinux/android_selinux.h"
-# include <sepol/policydb/flask.h>
-#else
+/*
 # include <selinux/flask.h>
 # include <selinux/av_permissions.h>
-#endif
+*/
 #endif
 #if ENABLE_FEATURE_UTMP
-# include <utmp.h>
+# if defined __UCLIBC__ && ( \
+    (UCLIBC_VERSION >= KERNEL_VERSION(0, 9, 32) \
+     && UCLIBC_VERSION < KERNEL_VERSION(0, 9, 34) \
+     && defined __UCLIBC_HAS_UTMPX__ \
+    ) || ( \
+	 UCLIBC_VERSION >= KERNEL_VERSION(0, 9, 34) \
+	) \
+  )
+#  include <utmpx.h>
+# elif defined __UCLIBC__
+#  include <utmp.h>
+#  define utmpx utmp
+#  define setutxent setutent
+#  define endutxent endutent
+#  define getutxent getutent
+#  define getutxid getutid
+#  define getutxline getutline
+#  define pututxline pututline
+#  define utmpxname utmpname
+#  define updwtmpx updwtmp
+#  define _PATH_UTMPX _PATH_UTMP
+# else
+#  include <utmpx.h>
+# endif
 #endif
 #if ENABLE_LOCALE_SUPPORT
 # include <locale.h>
@@ -110,16 +121,26 @@
 #endif
 /* Just in case libc doesn't define some of these... */
 #ifndef _PATH_PASSWD
-#define _PATH_PASSWD  "/etc/passwd"
+#define _PATH_PASSWD  "/system/etc/passwd"
 #endif
 #ifndef _PATH_GROUP
-#define _PATH_GROUP   "/etc/group"
+#define _PATH_GROUP   "/system/etc/group"
 #endif
 #ifndef _PATH_SHADOW
-#define _PATH_SHADOW  "/etc/shadow"
+#define _PATH_SHADOW  "/system/etc/shadow"
 #endif
 #ifndef _PATH_GSHADOW
-#define _PATH_GSHADOW "/etc/gshadow"
+#define _PATH_GSHADOW "/system/etc/gshadow"
+#endif
+#if defined(ANDROID) || defined(__ANDROID__)
+#undef _PATH_PASSWD
+#define _PATH_PASSWD  "/system/etc/passwd"
+#undef _PATH_GROUP
+#define _PATH_GROUP   "/system/etc/group"
+#undef _PATH_SHADOW
+#define _PATH_SHADOW  "/system/etc/shadow"
+#undef _PATH_GSHADOW
+#define _PATH_GSHADOW "/system/etc/gshadow"
 #endif
 #if defined __FreeBSD__ || defined __OpenBSD__
 # include <netinet/in.h>
@@ -179,7 +200,6 @@ int klogctl(int type, char *b, int len);
 # undef  fputc
 # define fputc(c, stream) putc_unlocked(c, stream)
 #endif
-
 /* Above functions are required by POSIX.1-2008, below ones are extensions */
 #ifdef HAVE_UNLOCKED_LINE_OPS
 # undef  fgets
@@ -271,15 +291,6 @@ struct BUG_off_t_size_is_misdetected {
 	char BUG_off_t_size_is_misdetected[sizeof(off_t) == sizeof(uoff_t) ? 1 : -1];
 };
 
-#if defined(__BIONIC__) && !defined(__LP64__)
-/* bionic uses stat64 which has long long file sizes, whereas off_t is only long bits */
-typedef long long filesize_t;
-#define FILESIZE_FMT "ll"
-#else
-typedef off_t filesize_t;
-#define FILESIZE_FMT OFF_FMT
-#endif
-
 /* Some useful definitions */
 #undef FALSE
 #define FALSE   ((int) 0)
@@ -358,6 +369,8 @@ enum {	/* DO NOT CHANGE THESE VALUES!  cp.c, mv.c, install.c depend on them. */
 	FILEUTILS_SET_SECURITY_CONTEXT = 1 << 10,
 #endif
 	FILEUTILS_IGNORE_CHMOD_ERR = 1 << 11,
+	/* -v */
+	FILEUTILS_VERBOSE         = (1 << 12) * ENABLE_FEATURE_VERBOSE,
 };
 #define FILEUTILS_CP_OPTSTR "pdRfilsLH" IF_SELINUX("c")
 extern int remove_file(const char *path, int flags) FAST_FUNC;
@@ -411,9 +424,11 @@ const char *bb_basename(const char *name) FAST_FUNC;
 /* NB: can violate const-ness (similarly to strchr) */
 char *last_char_is(const char *s, int c) FAST_FUNC;
 const char* endofname(const char *name) FAST_FUNC;
+char *is_prefixed_with(const char *string, const char *key) FAST_FUNC;
+char *is_suffixed_with(const char *string, const char *key) FAST_FUNC;
 
-void ndelay_on(int fd) FAST_FUNC;
-void ndelay_off(int fd) FAST_FUNC;
+int ndelay_on(int fd) FAST_FUNC;
+int ndelay_off(int fd) FAST_FUNC;
 void close_on_exec_on(int fd) FAST_FUNC;
 void xdup2(int, int) FAST_FUNC;
 void xmove_fd(int, int) FAST_FUNC;
@@ -505,7 +520,7 @@ int open_or_warn_stdin(const char *pathname) FAST_FUNC;
 int xopen_stdin(const char *pathname) FAST_FUNC;
 void xrename(const char *oldpath, const char *newpath) FAST_FUNC;
 int rename_or_warn(const char *oldpath, const char *newpath) FAST_FUNC;
-off64_t xlseek(int fd, off64_t offset, int whence) FAST_FUNC;
+off_t xlseek(int fd, off_t offset, int whence) FAST_FUNC;
 int xmkstemp(char *template) FAST_FUNC;
 off_t fdlength(int fd) FAST_FUNC;
 
@@ -559,6 +574,11 @@ void xlisten(int s, int backlog) FAST_FUNC;
 void xconnect(int s, const struct sockaddr *s_addr, socklen_t addrlen) FAST_FUNC;
 ssize_t xsendto(int s, const void *buf, size_t len, const struct sockaddr *to,
 				socklen_t tolen) FAST_FUNC;
+
+int setsockopt_int(int fd, int level, int optname, int optval) FAST_FUNC;
+int setsockopt_1(int fd, int level, int optname) FAST_FUNC;
+int setsockopt_SOL_SOCKET_int(int fd, int optname, int optval) FAST_FUNC;
+int setsockopt_SOL_SOCKET_1(int fd, int optname) FAST_FUNC;
 /* SO_REUSEADDR allows a server to rebind to an address that is already
  * "in use" by old connections to e.g. previous server instance which is
  * killed or crashed. Without it bind will fail until all such connections
@@ -566,6 +586,7 @@ ssize_t xsendto(int s, const void *buf, size_t len, const struct sockaddr *to,
  * regardless of SO_REUSEADDR (unlike some other flavors of Unix).
  * Turn it on before you call bind(). */
 void setsockopt_reuseaddr(int fd) FAST_FUNC; /* On Linux this never fails. */
+int setsockopt_keepalive(int fd) FAST_FUNC;
 int setsockopt_broadcast(int fd) FAST_FUNC;
 int setsockopt_bindtodevice(int fd, const char *iface) FAST_FUNC;
 /* NB: returns port in host byte order */
@@ -671,15 +692,19 @@ uint16_t inet_cksum(uint16_t *addr, int len) FAST_FUNC;
 
 char *xstrdup(const char *s) FAST_FUNC RETURNS_MALLOC;
 char *xstrndup(const char *s, int n) FAST_FUNC RETURNS_MALLOC;
+void *xmemdup(const void *s, int n) FAST_FUNC RETURNS_MALLOC;
 void overlapping_strcpy(char *dst, const char *src) FAST_FUNC;
 char *safe_strncpy(char *dst, const char *src, size_t size) FAST_FUNC;
 char *strncpy_IFNAMSIZ(char *dst, const char *src) FAST_FUNC;
+unsigned count_strstr(const char *str, const char *sub) FAST_FUNC;
+char *xmalloc_substitute_string(const char *src, int count, const char *sub, const char *repl) FAST_FUNC;
 /* Guaranteed to NOT be a macro (smallest code). Saves nearly 2k on uclibc.
  * But potentially slow, don't use in one-billion-times loops */
 int bb_putchar(int ch) FAST_FUNC;
 /* Note: does not use stdio, writes to fd 2 directly */
 int bb_putchar_stderr(char ch) FAST_FUNC;
 char *xasprintf(const char *format, ...) __attribute__ ((format(printf, 1, 2))) FAST_FUNC RETURNS_MALLOC;
+char *auto_string(char *str) FAST_FUNC;
 // gcc-4.1.1 still isn't good enough at optimizing it
 // (+200 bytes compared to macro)
 //static ALWAYS_INLINE
@@ -732,7 +757,7 @@ void* xrealloc_vector_helper(void *vector, unsigned sizeof_and_shift, int idx) F
 
 
 extern ssize_t safe_read(int fd, void *buf, size_t count) FAST_FUNC;
-extern ssize_t nonblock_immune_read(int fd, void *buf, size_t count, int loop_on_EINTR) FAST_FUNC;
+extern ssize_t nonblock_immune_read(int fd, void *buf, size_t count) FAST_FUNC;
 // NB: will return short read on error, not -1,
 // if some data was read before error occurred
 extern ssize_t full_read(int fd, void *buf, size_t count) FAST_FUNC;
@@ -751,6 +776,18 @@ extern void *xmalloc_open_read_close(const char *filename, size_t *maxsz_p) FAST
 /* Never returns NULL */
 extern void *xmalloc_xopen_read_close(const char *filename, size_t *maxsz_p) FAST_FUNC RETURNS_MALLOC;
 
+#if defined(ARG_MAX) && (ARG_MAX >= 60*1024 || !defined(_SC_ARG_MAX))
+/* Use _constant_ maximum if: defined && (big enough || no variable one exists) */
+# define bb_arg_max() ((unsigned)ARG_MAX)
+#elif defined(_SC_ARG_MAX)
+/* Else use variable one (a bit more expensive) */
+unsigned bb_arg_max(void) FAST_FUNC;
+#else
+/* If all else fails */
+# define bb_arg_max() ((unsigned)(32 * 1024))
+#endif
+unsigned bb_clk_tck(void) FAST_FUNC;
+
 #define SEAMLESS_COMPRESSION (0 \
  || ENABLE_FEATURE_SEAMLESS_XZ \
  || ENABLE_FEATURE_SEAMLESS_LZMA \
@@ -763,11 +800,12 @@ extern void *xmalloc_xopen_read_close(const char *filename, size_t *maxsz_p) FAS
 extern int setup_unzip_on_fd(int fd, int fail_if_not_compressed) FAST_FUNC;
 /* Autodetects .gz etc */
 extern int open_zipped(const char *fname, int fail_if_not_compressed) FAST_FUNC;
+extern void *xmalloc_open_zipped_read_close(const char *fname, size_t *maxsz_p) FAST_FUNC RETURNS_MALLOC;
 #else
 # define setup_unzip_on_fd(...) (0)
 # define open_zipped(fname, fail_if_not_compressed)  open((fname), O_RDONLY);
+# define xmalloc_open_zipped_read_close(fname, maxsz_p) xmalloc_open_read_close((fname), (maxsz_p))
 #endif
-extern void *xmalloc_open_zipped_read_close(const char *fname, size_t *maxsz_p) FAST_FUNC RETURNS_MALLOC;
 
 extern ssize_t safe_write(int fd, const void *buf, size_t count) FAST_FUNC;
 // NB: will return short write on error, not -1,
@@ -868,6 +906,8 @@ struct suffix_mult {
 };
 extern const struct suffix_mult bkm_suffixes[];
 #define km_suffixes (bkm_suffixes + 1)
+extern const struct suffix_mult cwbkMG_suffixes[];
+#define kMG_suffixes (cwbkMG_suffixes + 3)
 
 #include "xatonum.h"
 /* Specialized: */
@@ -903,8 +943,6 @@ int get_uidgid(struct bb_uidgid_t*, const char*, int numeric_ok) FAST_FUNC;
 void xget_uidgid(struct bb_uidgid_t*, const char*) FAST_FUNC;
 /* chown-like handling of "user[:[group]" */
 void parse_chown_usergroup_or_die(struct bb_uidgid_t *u, char *user_group) FAST_FUNC;
-struct passwd* safegetpwnam(const char *name) FAST_FUNC;
-struct passwd* safegetpwuid(uid_t uid) FAST_FUNC;
 struct passwd* xgetpwnam(const char *name) FAST_FUNC;
 struct group* xgetgrnam(const char *name) FAST_FUNC;
 struct passwd* xgetpwuid(uid_t uid) FAST_FUNC;
@@ -930,15 +968,17 @@ void die_if_bad_username(const char* name) FAST_FUNC;
 #if ENABLE_FEATURE_UTMP
 void FAST_FUNC write_new_utmp(pid_t pid, int new_type, const char *tty_name, const char *username, const char *hostname);
 void FAST_FUNC update_utmp(pid_t pid, int new_type, const char *tty_name, const char *username, const char *hostname);
+void FAST_FUNC update_utmp_DEAD_PROCESS(pid_t pid);
 #else
 # define write_new_utmp(pid, new_type, tty_name, username, hostname) ((void)0)
 # define update_utmp(pid, new_type, tty_name, username, hostname) ((void)0)
+# define update_utmp_DEAD_PROCESS(pid) ((void)0)
 #endif
 
 
-int execable_file(const char *name) FAST_FUNC;
-char *find_execable(const char *filename, char **PATHp) FAST_FUNC;
-int exists_execable(const char *filename) FAST_FUNC;
+int file_is_executable(const char *name) FAST_FUNC;
+char *find_executable(const char *filename, char **PATHp) FAST_FUNC;
+int executable_exists(const char *filename) FAST_FUNC;
 
 /* BB_EXECxx always execs (it's not doing NOFORK/NOEXEC stuff),
  * but it may exec busybox and call applet instead of searching PATH.
@@ -1098,10 +1138,10 @@ enum {
 	LOGMODE_BOTH = LOGMODE_SYSLOG + LOGMODE_STDIO,
 };
 extern const char *msg_eol;
+extern smallint syslog_level;
 extern smallint logmode;
-extern int die_sleep;
 extern uint8_t xfunc_error_retval;
-extern jmp_buf die_jmp;
+extern void (*die_func)(void);
 extern void xfunc_die(void) NORETURN FAST_FUNC;
 extern void bb_show_usage(void) NORETURN FAST_FUNC;
 extern void bb_error_msg(const char *s, ...) __attribute__ ((format (printf, 1, 2))) FAST_FUNC;
@@ -1116,6 +1156,7 @@ extern void bb_perror_nomsg_and_die(void) NORETURN FAST_FUNC;
 extern void bb_perror_nomsg(void) FAST_FUNC;
 extern void bb_info_msg(const char *s, ...) __attribute__ ((format (printf, 1, 2))) FAST_FUNC;
 extern void bb_verror_msg(const char *s, va_list p, const char *strerr) FAST_FUNC;
+extern void bb_logenv_override(void) FAST_FUNC;
 
 /* We need to export XXX_main from libbusybox
  * only if we build "individual" binaries
@@ -1222,7 +1263,8 @@ char *bb_ask_stdin(const char * prompt) FAST_FUNC;
 char *bb_ask(const int fd, int timeout, const char * prompt) FAST_FUNC;
 int bb_ask_confirmation(void) FAST_FUNC;
 
-int bb_parse_mode(const char* s, mode_t* theMode) FAST_FUNC;
+/* Returns -1 if input is invalid. current_mode is a base for e.g. "u+rw" */
+int bb_parse_mode(const char* s, unsigned cur_mode) FAST_FUNC;
 
 /*
  * Config file parser
@@ -1278,7 +1320,9 @@ char *bb_simplify_path(const char *path) FAST_FUNC;
 /* Returns ptr to NUL */
 char *bb_simplify_abs_path_inplace(char *path) FAST_FUNC;
 
+#ifndef LOGIN_FAIL_DELAY
 #define LOGIN_FAIL_DELAY 3
+#endif
 extern void bb_do_delay(int seconds) FAST_FUNC;
 extern void change_identity(const struct passwd *pw) FAST_FUNC;
 extern void run_shell(const char *shell, int loginshell, const char *command, const char **additional_args) NORETURN FAST_FUNC;
@@ -1328,6 +1372,7 @@ int sd_listen_fds(void);
 #define SETUP_ENV_NO_CHDIR  (1 << 4)
 void setup_environment(const char *shell, int flags, const struct passwd *pw) FAST_FUNC;
 void nuke_str(char *str) FAST_FUNC;
+int check_password(const struct passwd *pw, const char *plaintext) FAST_FUNC;
 int ask_and_check_password_extended(const struct passwd *pw, int timeout, const char *prompt) FAST_FUNC;
 int ask_and_check_password(const struct passwd *pw) FAST_FUNC;
 /* Returns a malloced string */
@@ -1483,9 +1528,9 @@ typedef struct line_input_t {
 	int flags;
 	const char *path_lookup;
 # if MAX_HISTORY
-	unsigned cnt_history;
-	unsigned cur_history;
-	unsigned max_history; /* must never be <= 0 */
+	int cnt_history;
+	int cur_history;
+	int max_history; /* must never be <= 0 */
 #  if ENABLE_FEATURE_EDITING_SAVEHISTORY
 	/* meaning of this field depends on FEATURE_EDITING_SAVE_ON_EXIT:
 	 * if !FEATURE_EDITING_SAVE_ON_EXIT: "how many lines are
@@ -1738,7 +1783,7 @@ extern const char *applet_name;
  * (1) newer linkers do it themselves,
  * (2) however, they DONT merge string constants with global arrays,
  * even if the value is the same (!). Thus global arrays actually
- * increased size a bit: for example, "/etc/passwd" string from libc
+ * increased size a bit: for example, "/system/etc/passwd" string from libc
  * wasn't merged with bb_path_passwd_file[] array!
  * Therefore now we use #defines.
  */
@@ -1764,14 +1809,14 @@ extern const char bb_path_wtmp_file[] ALIGN1;
 
 /* Busybox mount uses either /proc/mounts or /etc/mtab to
  * get the list of currently mounted filesystems */
-#define bb_path_mtab_file IF_FEATURE_MTAB_SUPPORT("/etc/mtab")IF_NOT_FEATURE_MTAB_SUPPORT("/proc/mounts")
+#define bb_path_mtab_file IF_FEATURE_MTAB_SUPPORT("/system/etc/mtab")IF_NOT_FEATURE_MTAB_SUPPORT("/proc/mounts")
 
 #define bb_path_passwd_file  _PATH_PASSWD
 #define bb_path_group_file   _PATH_GROUP
 #define bb_path_shadow_file  _PATH_SHADOW
 #define bb_path_gshadow_file _PATH_GSHADOW
 
-#define bb_path_motd_file "/etc/motd"
+#define bb_path_motd_file "/system/etc/motd"
 
 #define bb_dev_null "/dev/null"
 extern const char bb_busybox_exec_path[] ALIGN1;
@@ -1779,14 +1824,10 @@ extern const char bb_busybox_exec_path[] ALIGN1;
  * but I want to save a few bytes here */
 extern const char bb_PATH_root_path[] ALIGN1; /* "PATH=/sbin:/usr/sbin:/bin:/usr/bin" */
 #define bb_default_root_path (bb_PATH_root_path + sizeof("PATH"))
-#ifdef __BIONIC__
-#define bb_default_path      (bb_PATH_root_path + sizeof("PATH=/sbin"))
-#else
 #define bb_default_path      (bb_PATH_root_path + sizeof("PATH=/sbin:/usr/sbin"))
-#endif
 
 extern const int const_int_0;
-extern const int const_int_1;
+//extern const int const_int_1;
 
 
 /* Providing hard guarantee on minimum size (think of BUFSIZ == 128) */
@@ -1815,43 +1856,18 @@ extern struct globals *const ptr_to_globals;
  * use bb_default_login_shell and following defines.
  * If you change LIBBB_DEFAULT_LOGIN_SHELL,
  * don't forget to change increment constant. */
+#define LIBBB_DEFAULT_LOGIN_SHELL  "-/bin/sh"
 extern const char bb_default_login_shell[] ALIGN1;
-
-#ifdef __BIONIC__
-/* Since android does not have the /bin path, unlike most unix systems,
- * it needs an exception in the default shell path. */
-# define LIBBB_DEFAULT_LOGIN_SHELL      "-/system/bin/sh"
-/* "/system/xbin/sh" */
-# define DEFAULT_SHELL     (bb_default_login_shell+1)
-/* "sh" */
-# define DEFAULT_SHELL_SHORT_NAME     (bb_default_login_shell+13)
-
-#else
-# define LIBBB_DEFAULT_LOGIN_SHELL      "-/bin/sh"
 /* "/bin/sh" */
-# define DEFAULT_SHELL              (bb_default_login_shell+1)
+#define DEFAULT_SHELL              (bb_default_login_shell+1)
 /* "sh" */
-# define DEFAULT_SHELL_SHORT_NAME     (bb_default_login_shell+6)
-#endif
+#define DEFAULT_SHELL_SHORT_NAME   (bb_default_login_shell+6)
 
 /* The following devices are the same on all systems.  */
 #define CURRENT_TTY "/dev/tty"
 #define DEV_CONSOLE "/dev/console"
 
-#ifdef __BIONIC__
-# define CURRENT_VC CURRENT_TTY
-# define VC_1 "/dev/tty1"
-# define VC_2 "/dev/tty2"
-# define VC_3 "/dev/tty3"
-# define VC_4 "/dev/tty4"
-# define VC_5 "/dev/tty5"
-# define VC_FORMAT "/dev/tty%d"
-# define LOOP_FORMAT "/dev/block/loop%d"
-# define LOOP_NAMESIZE (sizeof("/dev/block/loop") + sizeof(int)*3 + 1)
-# define LOOP_NAME "/dev/block/loop"
-# define FB_0 "/dev/graphics/fb0"
-
-#elif defined(__FreeBSD_kernel__)
+#if defined(__FreeBSD_kernel__)
 # define CURRENT_VC CURRENT_TTY
 # define VC_1 "/dev/ttyv0"
 # define VC_2 "/dev/ttyv1"
@@ -1893,8 +1909,7 @@ extern const char bb_default_login_shell[] ALIGN1;
 # define LOOP_NAMESIZE (sizeof("/dev/loop") + sizeof(int)*3 + 1)
 # define LOOP_NAME "/dev/loop"
 # define FB_0 "/dev/fb0"
-
-#endif //Platform
+#endif
 
 
 #define ARRAY_SIZE(x) ((unsigned)(sizeof(x) / sizeof((x)[0])))
@@ -1981,6 +1996,140 @@ static ALWAYS_INLINE unsigned char bb_ascii_tolower(unsigned char a)
 /* NB: must not treat EOF as isgraph or isprint */
 #define isgraph_asciionly(a) ((unsigned)((a) - 0x21) <= 0x7e - 0x21)
 #define isprint_asciionly(a) ((unsigned)((a) - 0x20) <= 0x7e - 0x20)
+
+
+/* Simple unit-testing framework */
+
+typedef void (*bbunit_testfunc)(void);
+
+struct bbunit_listelem {
+	const char* name;
+	bbunit_testfunc testfunc;
+};
+
+void bbunit_registertest(struct bbunit_listelem* test);
+void bbunit_settestfailed(void);
+
+#define BBUNIT_DEFINE_TEST(NAME) \
+	static void bbunit_##NAME##_test(void); \
+	static struct bbunit_listelem bbunit_##NAME##_elem = { \
+		.name = #NAME, \
+		.testfunc = bbunit_##NAME##_test, \
+	}; \
+	static void INIT_FUNC bbunit_##NAME##_register(void) \
+	{ \
+		bbunit_registertest(&bbunit_##NAME##_elem); \
+	} \
+	static void bbunit_##NAME##_test(void)
+
+/*
+ * Both 'goto bbunit_end' and 'break' are here only to get rid
+ * of compiler warnings.
+ */
+#define BBUNIT_ENDTEST \
+	do { \
+		goto bbunit_end; \
+	bbunit_end: \
+		break; \
+	} while (0)
+
+#define BBUNIT_PRINTASSERTFAIL \
+	do { \
+		bb_error_msg( \
+			"[ERROR] Assertion failed in file %s, line %d", \
+			__FILE__, __LINE__); \
+	} while (0)
+
+#define BBUNIT_ASSERTION_FAILED \
+	do { \
+		bbunit_settestfailed(); \
+		goto bbunit_end; \
+	} while (0)
+
+/*
+ * Assertions.
+ * For now we only offer assertions which cause tests to fail
+ * immediately. In the future 'expects' might be added too -
+ * similar to those offered by the gtest framework.
+ */
+#define BBUNIT_ASSERT_EQ(EXPECTED, ACTUAL) \
+	do { \
+		if ((EXPECTED) != (ACTUAL)) { \
+			BBUNIT_PRINTASSERTFAIL; \
+			bb_error_msg("[ERROR] '%s' isn't equal to '%s'", \
+						#EXPECTED, #ACTUAL); \
+			BBUNIT_ASSERTION_FAILED; \
+		} \
+	} while (0)
+
+#define BBUNIT_ASSERT_NOTEQ(EXPECTED, ACTUAL) \
+	do { \
+		if ((EXPECTED) == (ACTUAL)) { \
+			BBUNIT_PRINTASSERTFAIL; \
+			bb_error_msg("[ERROR] '%s' is equal to '%s'", \
+						#EXPECTED, #ACTUAL); \
+			BBUNIT_ASSERTION_FAILED; \
+		} \
+	} while (0)
+
+#define BBUNIT_ASSERT_NOTNULL(PTR) \
+	do { \
+		if ((PTR) == NULL) { \
+			BBUNIT_PRINTASSERTFAIL; \
+			bb_error_msg("[ERROR] '%s' is NULL!", #PTR); \
+			BBUNIT_ASSERTION_FAILED; \
+		} \
+	} while (0)
+
+#define BBUNIT_ASSERT_NULL(PTR) \
+	do { \
+		if ((PTR) != NULL) { \
+			BBUNIT_PRINTASSERTFAIL; \
+			bb_error_msg("[ERROR] '%s' is not NULL!", #PTR); \
+			BBUNIT_ASSERTION_FAILED; \
+		} \
+	} while (0)
+
+#define BBUNIT_ASSERT_FALSE(STATEMENT) \
+	do { \
+		if ((STATEMENT)) { \
+			BBUNIT_PRINTASSERTFAIL; \
+			bb_error_msg("[ERROR] Statement '%s' evaluated to true!", \
+								#STATEMENT); \
+			BBUNIT_ASSERTION_FAILED; \
+		} \
+	} while (0)
+
+#define BBUNIT_ASSERT_TRUE(STATEMENT) \
+	do { \
+		if (!(STATEMENT)) { \
+			BBUNIT_PRINTASSERTFAIL; \
+			bb_error_msg("[ERROR] Statement '%s' evaluated to false!", \
+					#STATEMENT); \
+			BBUNIT_ASSERTION_FAILED; \
+		} \
+	} while (0)
+
+#define BBUNIT_ASSERT_STREQ(STR1, STR2) \
+	do { \
+		if (strcmp(STR1, STR2) != 0) { \
+			BBUNIT_PRINTASSERTFAIL; \
+			bb_error_msg("[ERROR] Strings '%s' and '%s' " \
+					"are not the same", STR1, STR2); \
+			BBUNIT_ASSERTION_FAILED; \
+		} \
+	} while (0)
+
+#define BBUNIT_ASSERT_STRNOTEQ(STR1, STR2) \
+	do { \
+		if (strcmp(STR1, STR2) == 0) { \
+			BBUNIT_PRINTASSERTFAIL; \
+			bb_error_msg("[ERROR] Strings '%s' and '%s' " \
+					"are the same, but were " \
+					"expected to differ", STR1, STR2); \
+			BBUNIT_ASSERTION_FAILED; \
+		} \
+	} while (0)
 
 
 POP_SAVED_FUNCTION_VISIBILITY
