@@ -29,7 +29,7 @@ LOCAL_SRC_FILES := $(shell cat $(BB_PATH)/android/librpc.sources)
 LOCAL_C_INCLUDES := $(BB_PATH)/android/librpc
 LOCAL_MODULE := libuclibcrpc
 LOCAL_CLANG := false
-LOCAL_CFLAGS += -fno-strict-aliasing -Wno-error=maybe-uninitialized
+LOCAL_CFLAGS += -fno-strict-aliasing -Wno-maybe-uninitialized
 LOCAL_CFLAGS += $(BIONIC_CFLAGS)
 include $(BUILD_STATIC_LIBRARY)
 
@@ -78,11 +78,8 @@ BUSYBOX_C_INCLUDES = \
 
 BB_VER := 1.22.1
 BUSYBOX_CFLAGS := $(BIONIC_CFLAGS) \
-	-Werror=implicit \
-        -Wno-error=sign-compare \
-        -Wno-error=format= \
-        -Wno-error=uninitialized \
-        -Wno-clobbered \
+	-Werror=implicit -Wno-clobbered \
+	-Wno-format -Wno-pointer-sign -Wno-sign-compare -Wno-uninitialized \
 	-DNDEBUG \
 	-fno-strict-aliasing \
 	-fno-builtin-stpcpy \
