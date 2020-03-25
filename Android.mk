@@ -18,9 +18,8 @@ BIONIC_CFLAGS := \
 include $(CLEAR_VARS)
 LOCAL_SRC_FILES := android/regex/bb_regex.c
 LOCAL_C_INCLUDES := $(BB_PATH)/android/regex
-LOCAL_CFLAGS := -Wno-sign-compare -fno-stack-protector
+LOCAL_CFLAGS := -Wno-sign-compare -fno-stack-protector -Wno-unused-parameter -Wno-unused-variable
 LOCAL_MODULE := libclearsilverregex
-LOCAL_CLANG := false
 include $(BUILD_STATIC_LIBRARY)
 
 # Make a static library for RPC library (coming from uClibc).
@@ -28,7 +27,6 @@ include $(CLEAR_VARS)
 LOCAL_SRC_FILES := $(shell cat $(BB_PATH)/android/librpc.sources)
 LOCAL_C_INCLUDES := $(BB_PATH)/android/librpc
 LOCAL_MODULE := libuclibcrpc
-LOCAL_CLANG := false
 LOCAL_CFLAGS += -fno-strict-aliasing -Wno-maybe-uninitialized
 LOCAL_CFLAGS += $(BIONIC_CFLAGS)
 include $(BUILD_STATIC_LIBRARY)
@@ -40,8 +38,16 @@ include $(BUILD_STATIC_LIBRARY)
 include $(CLEAR_VARS)
 
 BUSYBOX_CROSS_COMPILER_PREFIX := $(abspath $(TARGET_TOOLS_PREFIX))
-
-BB_PREPARE_FLAGS:=
+ifndef MAKE_PATH
+    GCC_PREBUILTS := $(PWD)/prebuilts/gcc/linux-x86/host
+    HOST_TOOLCHAIN := $(GCC_PREBUILTS)/x86_64-linux-glibc2.17-4.8/x86_64-linux/bin
+    HOST_TOOLCHAIN_LIBEXEC := $(GCC_PREBUILTS)/libexec/gcc/x86_64-linux/4.8.3
+    MAKE_EXTRA_PATH := $(HOST_TOOLCHAIN):$(HOST_TOOLCHAIN_LIBEXEC)
+    MAKE_PATH = PATH="$(MAKE_EXTRA_PATH):$$PATH" $(PWD)/prebuilts/build-tools/linux-x86/bin/make
+endif
+BB_CC := $(abspath $(TARGET_TOOLS_PREFIX))gcc
+BB_HOSTCC := $(abspath $(LLVM_PREBUILTS_PATH)/clang)
+BB_PREPARE_FLAGS := CC=$(BB_CC) HOSTCC=$(BB_HOSTCC) PKG_CONFIG=/usr/bin/pkg-config
 ifeq ($(HOST_OS),darwin)
     BB_HOSTCC := $(ANDROID_BUILD_TOP)/prebuilts/gcc/darwin-x86/host/i686-apple-darwin-4.2.1/bin/i686-apple-darwin11-gcc
     BB_PREPARE_FLAGS := HOSTCC=$(BB_HOSTCC)
@@ -80,6 +86,9 @@ BB_VER := 1.22.1
 BUSYBOX_CFLAGS := $(BIONIC_CFLAGS) \
 	-Werror=implicit -Wno-clobbered \
 	-Wno-format -Wno-pointer-sign -Wno-sign-compare -Wno-uninitialized \
+	-Wno-unused-function -Wno-string-plus-int -Wno-unused-local-typedef \
+	-Wno-shift-negative-value -Wno-address-of-packed-member -Wno-constant-conversion \
+	-Wno-logical-not-parentheses -Wno-non-literal-null-conversion -Wno-ignored-attributes \
 	-DNDEBUG \
 	-fno-strict-aliasing \
 	-fno-builtin-stpcpy \
@@ -106,8 +115,7 @@ LOCAL_CFLAGS += \
   -Dgenerate_uuid=busybox_generate_uuid
 LOCAL_ASFLAGS := $(BUSYBOX_AFLAGS)
 LOCAL_MODULE := libbusybox
-LOCAL_CLANG := false
-LOCAL_MODULE_TAGS := eng debug
+LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := STATIC_LIBRARIES
 LOCAL_STATIC_LIBRARIES := libcutils libc libm libselinux
 busybox_autoconf_minimal_h := $(local-generated-sources-dir)/include/autoconf.h
@@ -119,7 +127,7 @@ $(busybox_autoconf_minimal_h): $(BB_PATH)/busybox-minimal.config
 	@rm -rf $(dir $(@D)) $(shell find $(call intermediates-dir-for,STATIC_LIBRARIES,libbusybox) -name "*.o")
 	@mkdir -p $(@D)
 	$(hide) ( cat $^ && echo "CONFIG_CROSS_COMPILER_PREFIX=\"$(BUSYBOX_CROSS_COMPILER_PREFIX)\"" ) > $(dir $(@D)).config
-	make -C $(BB_PATH) prepare O=$(abspath $(dir $(@D))) $(BB_PREPARE_FLAGS)
+	$(MAKE_PATH) -C $(BB_PATH) prepare O=$(abspath $(dir $(@D))) $(BB_PREPARE_FLAGS)
 
 include $(BUILD_STATIC_LIBRARY)
 
@@ -133,8 +141,7 @@ BUSYBOX_SUFFIX:=bionic
 LOCAL_SRC_FILES := $(BUSYBOX_SRC_FILES)
 LOCAL_ASFLAGS := $(BUSYBOX_AFLAGS)
 LOCAL_MODULE := busybox
-LOCAL_CLANG := false
-LOCAL_MODULE_TAGS := eng debug
+LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := EXECUTABLES
 LOCAL_MODULE_PATH := $(TARGET_OUT_OPTIONAL_EXECUTABLES)
 LOCAL_SHARED_LIBRARIES := libc libcutils libm
@@ -148,7 +155,7 @@ $(busybox_autoconf_full_h): $(BB_PATH)/busybox-full.config
 	@rm -rf $(dir $(@D)) $(shell find $(call intermediates-dir-for,EXECUTABLES,busybox) -name "*.o")
 	@mkdir -p $(@D)
 	$(hide) ( cat $^ && echo "CONFIG_CROSS_COMPILER_PREFIX=\"$(BUSYBOX_CROSS_COMPILER_PREFIX)\"" ) > $(dir $(@D)).config
-	make -C $(BB_PATH) prepare O=$(abspath $(dir $(@D))) $(BB_PREPARE_FLAGS)
+	$(MAKE_PATH) -C $(BB_PATH) prepare O=$(abspath $(dir $(@D))) $(BB_PREPARE_FLAGS)
 
 include $(BUILD_EXECUTABLE)
 
@@ -188,7 +195,6 @@ LOCAL_CFLAGS += \
 LOCAL_ASFLAGS := $(BUSYBOX_AFLAGS)
 LOCAL_FORCE_STATIC_EXECUTABLE := true
 LOCAL_MODULE := static_busybox
-LOCAL_CLANG := false
 LOCAL_MODULE_STEM := busybox
 LOCAL_MODULE_TAGS := optional
 LOCAL_STATIC_LIBRARIES := libclearsilverregex libc libcutils libm libuclibcrpc libselinux
