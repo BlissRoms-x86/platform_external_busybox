@@ -142,6 +142,8 @@ typedef int (*cmp_funcp)(top_status_t *P, top_status_t *Q);
 
 enum { SORT_DEPTH = 3 };
 
+/* Screens wider than this are unlikely */
+enum { LINE_BUF_SIZE = 512 - 64 };
 
 struct globals {
 	top_status_t *top;
@@ -166,7 +168,7 @@ struct globals {
 #else
 	cmp_funcp sort_function[SORT_DEPTH];
 	struct save_hist *prev_hist;
-	int prev_hist_count;
+	unsigned prev_hist_count;
 	jiffy_counts_t cur_jif, prev_jif;
 	/* int hist_iterations; */
 	unsigned total_pcpu;
@@ -175,19 +177,14 @@ struct globals {
 #if ENABLE_FEATURE_TOP_SMP_CPU
 	/* Per CPU samples: current and last */
 	jiffy_counts_t *cpu_jif, *cpu_prev_jif;
-	int num_cpus;
+	unsigned num_cpus;
 #endif
 #if ENABLE_FEATURE_USE_TERMIOS
 	char kbd_input[KEYCODE_BUFFER_SIZE];
 #endif
-	char line_buf[80];
-}; //FIX_ALIASING; - large code growth
-enum { LINE_BUF_SIZE = COMMON_BUFSIZE - offsetof(struct globals, line_buf) };
-#define G (*(struct globals*)&bb_common_bufsiz1)
-struct BUG_bad_size {
-	char BUG_G_too_big[sizeof(G) <= COMMON_BUFSIZE ? 1 : -1];
-	char BUG_line_buf_too_small[LINE_BUF_SIZE > 80 ? 1 : -1];
+	char line_buf[LINE_BUF_SIZE];
 };
+#define G (*ptr_to_globals)
 #define top              (G.top               )
 #define ntop             (G.ntop              )
 #define sort_field       (G.sort_field        )
@@ -204,7 +201,10 @@ struct BUG_bad_size {
 #define num_cpus         (G.num_cpus          )
 #define total_pcpu       (G.total_pcpu        )
 #define line_buf         (G.line_buf          )
-#define INIT_G() do { } while (0)
+#define INIT_G() do { \
+	SET_PTR_TO_GLOBALS(xzalloc(sizeof(G))); \
+	BUILD_BUG_ON(LINE_BUF_SIZE <= 80); \
+} while (0)
 
 enum {
 	OPT_d = (1 << 0),
@@ -343,7 +343,8 @@ static void do_stats(void)
 {
 	top_status_t *cur;
 	pid_t pid;
-	int i, last_i, n;
+	int n;
+	unsigned i, last_i;
 	struct save_hist *new_hist;
 
 	get_jiffy_counts();
@@ -499,85 +500,93 @@ static void display_cpus(int scr_width, char *scrbuf, int *lines_rem_p)
 # define display_cpus(scr_width, scrbuf, lines_rem) ((void)0)
 #endif
 
+enum {
+	MI_MEMTOTAL,
+	MI_MEMFREE,
+	MI_MEMSHARED,
+	MI_SHMEM,
+	MI_BUFFERS,
+	MI_CACHED,
+	MI_SWAPTOTAL,
+	MI_SWAPFREE,
+	MI_DIRTY,
+	MI_WRITEBACK,
+	MI_ANONPAGES,
+	MI_MAPPED,
+	MI_SLAB,
+	MI_MAX
+};
+
+static void parse_meminfo(unsigned long meminfo[MI_MAX])
+{
+	static const char fields[] =
+		"MemTotal\0"
+		"MemFree\0"
+		"MemShared\0"
+		"Shmem\0"
+		"Buffers\0"
+		"Cached\0"
+		"SwapTotal\0"
+		"SwapFree\0"
+		"Dirty\0"
+		"Writeback\0"
+		"AnonPages\0"
+		"Mapped\0"
+		"Slab\0";
+	char buf[60]; /* actual lines we expect are ~30 chars or less */
+	FILE *f;
+	int i;
+
+	memset(meminfo, 0, sizeof(meminfo[0]) * MI_MAX);
+	f = xfopen_for_read("meminfo");
+	while (fgets(buf, sizeof(buf), f) != NULL) {
+		char *c = strchr(buf, ':');
+		if (!c)
+			continue;
+		*c = '\0';
+		i = index_in_strings(fields, buf);
+		if (i >= 0)
+			meminfo[i] = strtoul(c+1, NULL, 10);
+	}
+	fclose(f);
+}
+
 static unsigned long display_header(int scr_width, int *lines_rem_p)
 {
-	FILE *fp;
-	char buf[80];
-	char scrbuf[80];
-	unsigned long total, used, mfree, shared, buffers, cached;
+	char scrbuf[100]; /* [80] was a bit too low on 8Gb ram box */
+	char *buf;
+	unsigned long meminfo[MI_MAX];
 
-	/* read memory info */
-	fp = xfopen_for_read("meminfo");
+	parse_meminfo(meminfo);
 
-	/*
-	 * Old kernels (such as 2.4.x) had a nice summary of memory info that
-	 * we could parse, however this is gone entirely in 2.6. Try parsing
-	 * the old way first, and if that fails, parse each field manually.
-	 *
-	 * First, we read in the first line. Old kernels will have bogus
-	 * strings we don't care about, whereas new kernels will start right
-	 * out with MemTotal:
-	 *                              -- PFM.
-	 */
-	if (fscanf(fp, "MemTotal: %lu %s\n", &total, buf) != 2) {
-		fgets(buf, sizeof(buf), fp);    /* skip first line */
-
-		fscanf(fp, "Mem: %lu %lu %lu %lu %lu %lu",
-			&total, &used, &mfree, &shared, &buffers, &cached);
-		/* convert to kilobytes */
-		used /= 1024;
-		mfree /= 1024;
-		shared /= 1024;
-		buffers /= 1024;
-		cached /= 1024;
-		total /= 1024;
-	} else {
-		/*
-		 * Revert to manual parsing, which incidentally already has the
-		 * sizes in kilobytes. This should be safe for both 2.4 and
-		 * 2.6.
-		 */
-		fscanf(fp, "MemFree: %lu %s\n", &mfree, buf);
-
-		/*
-		 * MemShared: is no longer present in 2.6. Report this as 0,
-		 * to maintain consistent behavior with normal procps.
-		 */
-		if (fscanf(fp, "MemShared: %lu %s\n", &shared, buf) != 2)
-			shared = 0;
-
-		fscanf(fp, "Buffers: %lu %s\n", &buffers, buf);
-		fscanf(fp, "Cached: %lu %s\n", &cached, buf);
-
-		used = total - mfree;
-	}
-	fclose(fp);
-
-	/* output memory info */
+	/* Output memory info */
 	if (scr_width > (int)sizeof(scrbuf))
 		scr_width = sizeof(scrbuf);
 	snprintf(scrbuf, scr_width,
 		"Mem: %luK used, %luK free, %luK shrd, %luK buff, %luK cached",
-		used, mfree, shared, buffers, cached);
-	/* go to top & clear to the end of screen */
+		meminfo[MI_MEMTOTAL] - meminfo[MI_MEMFREE],
+		meminfo[MI_MEMFREE],
+		meminfo[MI_MEMSHARED] + meminfo[MI_SHMEM],
+		meminfo[MI_BUFFERS],
+		meminfo[MI_CACHED]);
+	/* Go to top & clear to the end of screen */
 	printf(OPT_BATCH_MODE ? "%s\n" : "\033[H\033[J%s\n", scrbuf);
 	(*lines_rem_p)--;
 
-	/* Display CPU time split as percentage of total time
-	 * This displays either a cumulative line or one line per CPU
+	/* Display CPU time split as percentage of total time.
+	 * This displays either a cumulative line or one line per CPU.
 	 */
 	display_cpus(scr_width, scrbuf, lines_rem_p);
 
-	/* read load average as a string */
-	buf[0] = '\0';
-	open_read_close("loadavg", buf, sizeof(buf) - 1);
-	buf[sizeof(buf) - 1] = '\n';
-	*strchr(buf, '\n') = '\0';
-	snprintf(scrbuf, scr_width, "Load average: %s", buf);
+	/* Read load average as a string */
+	buf = stpcpy(scrbuf, "Load average: ");
+	open_read_close("loadavg", buf, sizeof(scrbuf) - sizeof("Load average: "));
+	scrbuf[scr_width - 1] = '\0';
+	strchrnul(buf, '\n')[0] = '\0';
 	puts(scrbuf);
 	(*lines_rem_p)--;
 
-	return total;
+	return meminfo[MI_MEMTOTAL];
 }
 
 static NOINLINE void display_process_list(int lines_rem, int scr_width)
@@ -587,7 +596,6 @@ static NOINLINE void display_process_list(int lines_rem, int scr_width)
 	};
 
 	top_status_t *s;
-	char vsz_str_buf[8];
 	unsigned long total_memory = display_header(scr_width, &lines_rem); /* or use total_vsz? */
 	/* xxx_shift and xxx_scale variables allow us to replace
 	 * expensive divides with multiply and shift */
@@ -668,19 +676,18 @@ static NOINLINE void display_process_list(int lines_rem, int scr_width)
 		lines_rem = ntop - G_scroll_ofs;
 	s = top + G_scroll_ofs;
 	while (--lines_rem >= 0) {
+		char vsz_str_buf[8];
 		unsigned col;
+
 		CALC_STAT(pmem, (s->vsz*pmem_scale + pmem_half) >> pmem_shift);
 #if ENABLE_FEATURE_TOP_CPU_USAGE_PERCENTAGE
 		CALC_STAT(pcpu, (s->pcpu*pcpu_scale + pcpu_half) >> pcpu_shift);
 #endif
 
-		if (s->vsz >= 100000)
-			sprintf(vsz_str_buf, "%6ldm", s->vsz/1024);
-		else
-			sprintf(vsz_str_buf, "%7lu", s->vsz);
+		smart_ulltoa5(s->vsz, vsz_str_buf, " mgtpezy");
 		/* PID PPID USER STAT VSZ %VSZ [%CPU] COMMAND */
 		col = snprintf(line_buf, scr_width,
-				"\n" "%5u%6u %-8.8s %s%s" FMT
+				"\n" "%5u%6u %-8.8s %s  %.5s" FMT
 				IF_FEATURE_TOP_SMP_PROCESS(" %3d")
 				IF_FEATURE_TOP_CPU_USAGE_PERCENTAGE(FMT)
 				" ",
@@ -690,7 +697,7 @@ static NOINLINE void display_process_list(int lines_rem, int scr_width)
 				IF_FEATURE_TOP_SMP_PROCESS(, s->last_seen_on_cpu)
 				IF_FEATURE_TOP_CPU_USAGE_PERCENTAGE(, SHOW_STAT(pcpu))
 		);
-		if ((int)(col + 1) < scr_width)
+		if ((int)(scr_width - col) > 1)
 			read_cmdline(line_buf + col, scr_width - col, s->pid, s->comm);
 		fputs(line_buf, stdout);
 		/* printf(" %d/%d %lld/%lld", s->pcpu, total_pcpu,
@@ -719,12 +726,6 @@ static void reset_term(void)
 {
 	if (!OPT_BATCH_MODE)
 		tcsetattr_stdin_TCSANOW(&initial_settings);
-	if (ENABLE_FEATURE_CLEAN_UP) {
-		clearmems();
-# if ENABLE_FEATURE_TOP_CPU_USAGE_PERCENTAGE
-		free(prev_hist);
-# endif
-	}
 }
 
 static void sig_catcher(int sig)
@@ -781,64 +782,31 @@ static int topmem_sort(char *a, char *b)
 /* display header info (meminfo / loadavg) */
 static void display_topmem_header(int scr_width, int *lines_rem_p)
 {
-	enum {
-		TOTAL = 0, MFREE, BUF, CACHE,
-		SWAPTOTAL, SWAPFREE, DIRTY,
-		MWRITE, ANON, MAP, SLAB,
-		NUM_FIELDS
-	};
-	static const char match[NUM_FIELDS][12] = {
-		"\x09" "MemTotal:",  // TOTAL
-		"\x08" "MemFree:",   // MFREE
-		"\x08" "Buffers:",   // BUF
-		"\x07" "Cached:",    // CACHE
-		"\x0a" "SwapTotal:", // SWAPTOTAL
-		"\x09" "SwapFree:",  // SWAPFREE
-		"\x06" "Dirty:",     // DIRTY
-		"\x0a" "Writeback:", // MWRITE
-		"\x0a" "AnonPages:", // ANON
-		"\x07" "Mapped:",    // MAP
-		"\x05" "Slab:",      // SLAB
-	};
-	char meminfo_buf[4 * 1024];
-	const char *Z[NUM_FIELDS];
-	unsigned i;
-	int sz;
+	unsigned long meminfo[MI_MAX];
 
-	for (i = 0; i < NUM_FIELDS; i++)
-		Z[i] = "?";
-
-	/* read memory info */
-	sz = open_read_close("meminfo", meminfo_buf, sizeof(meminfo_buf) - 1);
-	if (sz >= 0) {
-		char *p = meminfo_buf;
-		meminfo_buf[sz] = '\0';
-		/* Note that fields always appear in the match[] order */
-		for (i = 0; i < NUM_FIELDS; i++) {
-			char *found = strstr(p, match[i] + 1);
-			if (found) {
-				/* Cut "NNNN" out of "    NNNN kb" */
-				char *s = skip_whitespace(found + match[i][0]);
-				p = skip_non_whitespace(s);
-				*p++ = '\0';
-				Z[i] = s;
-			}
-		}
-	}
+	parse_meminfo(meminfo);
 
 	snprintf(line_buf, LINE_BUF_SIZE,
-		"Mem total:%s anon:%s map:%s free:%s",
-		Z[TOTAL], Z[ANON], Z[MAP], Z[MFREE]);
+		"Mem total:%lu anon:%lu map:%lu free:%lu",
+		meminfo[MI_MEMTOTAL],
+		meminfo[MI_ANONPAGES],
+		meminfo[MI_MAPPED],
+		meminfo[MI_MEMFREE]);
 	printf(OPT_BATCH_MODE ? "%.*s\n" : "\033[H\033[J%.*s\n", scr_width, line_buf);
 
 	snprintf(line_buf, LINE_BUF_SIZE,
-		" slab:%s buf:%s cache:%s dirty:%s write:%s",
-		Z[SLAB], Z[BUF], Z[CACHE], Z[DIRTY], Z[MWRITE]);
+		" slab:%lu buf:%lu cache:%lu dirty:%lu write:%lu",
+		meminfo[MI_SLAB],
+		meminfo[MI_BUFFERS],
+		meminfo[MI_CACHED],
+		meminfo[MI_DIRTY],
+		meminfo[MI_WRITEBACK]);
 	printf("%.*s\n", scr_width, line_buf);
 
 	snprintf(line_buf, LINE_BUF_SIZE,
-		"Swap total:%s free:%s", // TODO: % used?
-		Z[SWAPTOTAL], Z[SWAPFREE]);
+		"Swap total:%lu free:%lu", // TODO: % used?
+		meminfo[MI_SWAPTOTAL],
+		meminfo[MI_SWAPFREE]);
 	printf("%.*s\n", scr_width, line_buf);
 
 	(*lines_rem_p) -= 3;
@@ -917,16 +885,11 @@ enum {
 #if ENABLE_FEATURE_USE_TERMIOS
 static unsigned handle_input(unsigned scan_mask, unsigned interval)
 {
-	struct pollfd pfd[1];
-
 	if (option_mask32 & OPT_EOF) {
 		/* EOF on stdin ("top </dev/null") */
 		sleep(interval);
 		return scan_mask;
 	}
-
-	pfd[0].fd = 0;
-	pfd[0].events = POLLIN;
 
 	while (1) {
 		int32_t c;
@@ -1286,5 +1249,11 @@ int top_main(int argc UNUSED_PARAM, char **argv)
 #if ENABLE_FEATURE_USE_TERMIOS
 	reset_term();
 #endif
+	if (ENABLE_FEATURE_CLEAN_UP) {
+		clearmems();
+#if ENABLE_FEATURE_TOP_CPU_USAGE_PERCENTAGE
+		free(prev_hist);
+#endif
+	}
 	return EXIT_SUCCESS;
 }
